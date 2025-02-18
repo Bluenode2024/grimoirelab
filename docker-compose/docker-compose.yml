@@ -1,0 +1,175 @@
+version: '2.2'
+
+services:
+    mariadb:
+      image: mariadb:10.6
+      expose:
+        - "3306"
+      environment:
+        - MYSQL_ROOT_PASSWORD=
+        - MYSQL_ALLOW_EMPTY_PASSWORD=yes
+      healthcheck:
+        test: [ "CMD", "/usr/local/bin/healthcheck.sh", "--su=root", "--connect", "--innodb_initialized" ]
+        retries: 5
+
+    redis:
+      image: redis:latest
+      expose:
+        - "6379"
+      healthcheck:
+        test: [ "CMD", "redis-cli", "--raw", "incr", "ping" ]
+        retries: 5
+
+    elasticsearch:
+      image: docker.elastic.co/elasticsearch/elasticsearch:7.17.13
+      platform: linux/arm64 
+      command: elasticsearch -Enetwork.bind_host=0.0.0.0 -Ehttp.max_content_length=2000mb
+      ports:
+        - 9200:9200
+      environment:
+        - ES_JAVA_OPTS=-Xms2g -Xmx2g
+        - ANONYMOUS_USER=true
+        - "bootstrap.system_call_filter=false"
+        - "discovery.type=single-node"    # 단일 노드 모드 활성화
+        - "xpack.security.enabled=false"  # xpack 보안 비활성화
+      ulimits:                           # 시스템 리소스 제한 설정
+        memlock:
+          soft: -1
+          hard: -1
+        nofile:
+          soft: 65536
+          hard: 65536
+
+    kibiter:
+      restart: on-failure:5
+      image: bitergia/kibiter:community-v6.8.6-3
+      environment:
+        - PROJECT_NAME=Demo
+        - NODE_OPTIONS=--max-old-space-size=1000
+        - ELASTICSEARCH_URL=http://elasticsearch:9200
+      links:
+        - elasticsearch
+      ports:
+        - 5601:5601
+
+    mordred:
+      restart: on-failure:5
+      image: grimoirelab/grimoirelab:latest
+      volumes:
+        - ../default-grimoirelab-settings/setup.cfg:/home/grimoire/conf/setup.cfg
+        - ../default-grimoirelab-settings/projects.json:/home/grimoire/conf/projects.json
+        - /tmp/:/home/grimoire/logs
+      depends_on:
+        nginx:
+          condition: service_healthy
+      mem_limit: 4g
+
+    sortinghat:
+      restart: on-failure:3
+      image: grimoirelab/sortinghat
+      environment:
+        - SORTINGHAT_SECRET_KEY=secret
+        - SORTINGHAT_DB_HOST=mariadb
+        - SORTINGHAT_DB_PORT=3306
+        - SORTINGHAT_DB_DATABASE=sortinghat_db
+        - SORTINGHAT_DB_USER=root
+        - SORTINGHAT_DB_PASSWORD=
+        - SORTINGHAT_REDIS_HOST=redis
+        - SORTINGHAT_REDIS_PASSWORD=
+        - SORTINGHAT_SUPERUSER_USERNAME=root
+        - SORTINGHAT_SUPERUSER_PASSWORD=root
+        - SORTINGHAT_ALLOWED_HOST=sortinghat,nginx,localhost,127.0.0.1,[::1]
+        - SORTINGHAT_CORS_ALLOWED_ORIGINS=http://localhost:8000,http://127.0.0.1:8000
+      expose:
+        - "9314"
+      volumes:
+        - sortinghat-static:/opt/venv/lib/python3.9/site-packages/sortinghat/static/
+      depends_on:
+        mariadb:
+          condition: service_healthy
+        redis:
+          condition: service_healthy
+
+    sortinghat_worker:
+      image: grimoirelab/sortinghat-worker
+      environment:
+        - SORTINGHAT_SECRET_KEY=secret
+        - SORTINGHAT_DB_HOST=mariadb
+        - SORTINGHAT_DB_PORT=3306
+        - SORTINGHAT_DB_DATABASE=sortinghat_db
+        - SORTINGHAT_DB_USER=root
+        - SORTINGHAT_DB_PASSWORD=
+        - SORTINGHAT_REDIS_HOST=redis
+        - SORTINGHAT_REDIS_PASSWORD=
+      depends_on:
+        mariadb:
+          condition: service_healthy
+        redis:
+          condition: service_healthy
+
+    nginx:
+      restart: on-failure:3
+      image: nginx:latest
+      volumes:
+        - ../default-grimoirelab-settings/nginx.conf.template:/etc/nginx/templates/default.conf.template
+        - ../default-grimoirelab-settings/uwsgi_params:/etc/nginx/uwsgi_params
+        - sortinghat-static:/sortinghat:ro
+      ports:
+        - 8000:8000
+      environment:
+        - KIBANA_HOST=http://kibiter:5601/
+      depends_on:
+        - sortinghat
+      healthcheck:
+        test: "curl -s --head http://localhost:8000/identities/api/ | grep Set-Cookie || exit 1"
+        retries: 5
+      networks:
+        - default
+
+    grimoirelab-api:
+      build: ../grimoirelab-api
+      ports:
+        - "9000:9000"
+      environment:
+        - PROJECTS_JSON_PATH=/default-grimoirelab-settings/projects.json
+        - GIT_USERNAME=jaerius
+        - GIT_TOKEN=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
+      volumes:
+        - ../default-grimoirelab-settings:/default-grimoirelab-settings
+        - /var/run/docker.sock:/var/run/docker.sock
+      networks:
+        - default
+      healthcheck:
+        test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+        interval: 10s
+        timeout: 5s
+        retries: 3
+      depends_on:
+        - elasticsearch
+        - mordred
+
+    backend-api:
+      build: ../backend-api
+      ports:
+        - "10000:10000"
+      environment:
+        - FLASK_APP=app.py
+        - FLASK_DEBUG=1
+        - FLASK_RUN_PORT=10000
+        - GRIMOIRELAB_API_URL=http://grimoirelab-api:9000
+      command: ["flask", "run", "--host=0.0.0.0", "--port=10000"]
+      volumes:
+        - ../default-grimoirelab-settings:/default-grimoirelab-settings
+        - ../backend-api:/app
+      networks:
+        - default
+      depends_on:
+        grimoirelab-api:
+          condition: service_healthy
+
+networks:
+  default:  # grimoirelab-network 대신 default 네트워크 사용
+    name: grimoirelab_default  # 기존 네트워크 이름과 일치시킴
+
+volumes:
+  sortinghat-static:

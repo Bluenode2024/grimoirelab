@@ -1,0 +1,332 @@
+name: Release GrimoireLab component
+
+on:
+  workflow_call:
+    inputs:
+      git_email:
+        description: 'Git config email'
+        type: string
+        required: true
+      git_name:
+        description: 'Git config name'
+        type: string
+        required: true
+      release_candidate:
+        description: 'Create a release candidate version'
+        type: string
+        required: true
+      bump_major:
+        description: 'Create a new major version release'
+        type: string
+        required: true
+      module_name:
+        description: 'Name of the module'
+        type: string
+        required: true
+      module_repository:
+        description: 'Repository of the module'
+        type: string
+        required: true
+      module_directory:
+        description: 'Location of the module in Grimoirelab'
+        type: string
+        required: true
+      dependencies:
+        description: 'Package dependencies and their version'
+        type: string
+        required: true
+    secrets:
+      access_token:
+        description: 'Token for updating repositories'
+        required: true
+
+    outputs:
+      package_version:
+        description: "Package version formatted for Poetry"
+        value: ${{ jobs.release.outputs.package_version }}
+      version:
+        description: "Version number for the package"
+        value: ${{ jobs.release.outputs.version }}
+      notes:
+        description: "Notes content for the package"
+        value: ${{ jobs.release.outputs.notes }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: grimoire-release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      package_version: ${{ steps.version.outputs.package_version }}
+      notes: ${{ steps.notes.outputs.notes }}
+
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.1.0
+        with:
+          python-version: 3.9
+
+      - name: Set up Git config
+        run: |
+          git config --global user.email "${{ inputs.git_email }}"
+          git config --global user.name "${{ inputs.git_name }}"
+
+      - name: Configure repository credentials
+        run: |
+          git submodule set-url ${{ inputs.module_directory }} https://${{ secrets.access_token }}@github.com/${{ inputs.module_repository }}.git
+
+      - name: Checkout submodule ${{ inputs.module_directory }}
+        run: |
+          git submodule update --init --remote ${{ inputs.module_directory }}
+          cd ${{ inputs.module_directory }}
+          git checkout main
+
+      - name: Install poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "PATH=$HOME/.poetry/bin:$PATH" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Install release-tools
+        #TODO: Change to the latest version once the new release is created
+        run: pip install git+https://github.com/Bitergia/release-tools.git#egg=release-tools
+
+      - id: old-version
+        name: Get old version
+        run: |
+          version=$(poetry version -s)
+          echo "version=$version" >> $GITHUB_OUTPUT
+        working-directory: ${{ inputs.module_directory }}
+
+      - id: check-dependencies
+        name: Check is package dependencies are ready
+        run: |
+          dependencies="${{ inputs.dependencies }}"
+          if [ ! -z "$dependencies" ]
+          then
+            clear_cache() {
+              for cache in $(poetry cache list); do
+                echo "Clear $cache"
+                poetry -n cache clear $cache --all
+              done
+            }
+            timeout=5
+            for i in $(seq 5)
+            do
+              clear_cache
+              poetry add --lock --dry-run $dependencies && exit 0
+              sleep $timeout
+              timeout=$(( timeout * 2 ))
+            done
+            exit 1
+          fi
+        working-directory: ${{ inputs.module_directory }}
+
+      - id: update-dependencies
+        name: Update package dependencies
+        run: |
+          poetry update --lock
+          dep_updated=$(git diff poetry.lock | wc -l)
+          echo "dep_updated=$dep_updated" >> $GITHUB_OUTPUT
+          if [ $dep_updated -gt 0 ]
+          then
+            git diff
+            git add poetry.lock
+            git commit -m "Update Poetry dependencies"
+          fi
+        working-directory: ${{ inputs.module_directory }}
+
+      - id: semverup
+        name: Update version number
+        continue-on-error: true
+        shell: bash {0}
+        run: |
+          if [ ${{ inputs.release_candidate }} == 'true' ]
+          then
+            rcArg='--pre-release'
+          else
+            rcArg=''
+          fi
+          old_version=${{ steps.old-version.outputs.version }}
+          dep_updated=${{ steps.update-dependencies.outputs.dep_updated }}
+
+          if [ ${{ inputs.bump_major }} == 'true' ]
+          then
+            version=$(semverup --bump-version major $rcArg)
+          else
+            version=$(semverup $rcArg)
+          fi
+
+          if [ -z $version ] && [ $dep_updated -gt 0 ]
+          then
+            echo "Dependencies updated, force new version"
+            version=$(semverup --bump-version patch $rcArg)
+            echo "forced_version=true" >> $GITHUB_OUTPUT
+          elif [ -z $version ] && [ ${{ inputs.release_candidate }} != 'true' ] && [[ "$old_version" =~ .*rc.* ]]
+          then
+            echo "Create final version from rc"
+            version=$(semverup --bump-version patch)
+            echo "forced_version=true" >> $GITHUB_OUTPUT
+          else
+            echo "forced_version=false" >> $GITHUB_OUTPUT
+          fi
+          echo $version
+          if [ -z $version ]; then exit 1; fi
+        working-directory: ${{ inputs.module_directory }}
+
+      - id: version
+        name: Get current version
+        run: |
+          version=$(poetry version -s)
+          package_version="${{ inputs.module_name }}@>=$version"
+          echo "package_version=$package_version" >> $GITHUB_OUTPUT
+          echo "version=$version" >> $GITHUB_OUTPUT
+          echo $package_version
+        working-directory: ${{ inputs.module_directory }}
+
+      - id: notes
+        name: Generate release notes.
+        if: steps.semverup.outcome == 'success'
+        run: |
+          version=${{ steps.version.outputs.version }}
+          eof="EOF$(date +%s)"
+          release_file="releases/$version.md"
+          if [ ${{ inputs.release_candidate }} == 'true' ]
+          then
+            newsArg=''
+            rcArg='--pre-release'
+          else
+            newsArg='--news'
+            rcArg=''
+          fi
+          
+          if [ ${{ steps.semverup.outputs.forced_version }} != 'true' ]
+          then
+            notes "${{ inputs.module_name }}" $version $newsArg --authors $rcArg
+          else
+            module_name=${{ inputs.module_name }}
+            today=$(date -u "+%Y-%m-%d")
+            cat << EOF > $release_file
+            ## $module_name $version - ($today)
+            
+            * Update Poetry's package dependencies
+          EOF
+            # Update NEWS file if it is not a release candidate
+            if [ ${{ inputs.release_candidate }} != 'true' ]
+            then
+              mv NEWS old_NEWS
+              echo -e "# Releases\n" >> NEWS
+              cat $release_file >> NEWS
+              cat old_NEWS | tail -n +2 >> NEWS
+            fi
+          fi
+
+          # Save release notes in 'notes' output
+          echo 'notes<<$eof' >> $GITHUB_OUTPUT
+          cat $release_file >> $GITHUB_OUTPUT
+          echo '$eof' >> $GITHUB_OUTPUT
+        working-directory: ${{ inputs.module_directory }}
+
+      - id: current_time
+        name: Store current time to get the release workflow
+        if: steps.semverup.outcome == 'success'
+        run: |
+          datetime=$(date +"%Y-%m-%dT%H:%M:%S%z")
+          echo "datetime=$datetime" >> $GITHUB_OUTPUT
+          echo $datetime
+
+      - id: publish
+        name: Publish new version.
+        if: steps.semverup.outcome == 'success'
+        run: |
+          if [ ${{ inputs.release_candidate }} == 'true' ]
+          then
+            publish ${{ steps.version.outputs.version }} "${{ inputs.git_name }} <${{ inputs.git_email }}>" --push origin --remote-branch main --no-cleanup
+          else
+            publish ${{ steps.version.outputs.version }} "${{ inputs.git_name }} <${{ inputs.git_email }}>" --push origin --remote-branch main 
+          fi
+        working-directory: ${{ inputs.module_directory }}
+
+      - id: wait-for-release
+        name: Wait for release to finish.
+        continue-on-error: true
+        if: steps.publish.outcome == 'success'
+        run: |
+          url="https://api.github.com/repos/${{ inputs.module_repository }}/actions/workflows/release.yml/runs?created=>${{ steps.current_time.outputs.datetime }}"
+          while true
+          do
+            workflows=$(curl -sS -H "Authorization: token ${{ secrets.access_token }}" $url)
+            if [ $(echo $workflows | jq '.total_count') -eq 0 ]
+            then
+              echo "Release workflow did not start"
+              sleep 60
+              continue
+            fi
+
+            release_conclusion=$(echo $workflows | jq '.workflow_runs[0].conclusion')
+            release_status=$(echo $workflows | jq '.workflow_runs[0].status')
+            if [ $release_status = \"completed\" -a $release_conclusion = \"success\" ]
+            then
+              echo "Release completed!";
+              break;
+            elif [ $release_status = \"completed\" -a $release_conclusion != \"success\" ]
+            then
+              echo "Release failed!";
+              exit 1;
+            else
+              echo $release_conclusion $release_status
+              echo "Waiting for release..."
+              sleep 60
+            fi
+          done
+
+      - id: check-package-ready
+        name: Wait for package ready in PyPI
+        shell: bash
+        if: steps.wait-for-release.outcome == 'success'
+        run: |
+          package="${{ inputs.module_name }}"
+          version="${{ steps.version.outputs.version }}"
+          # Format version 1.2.3-rc.1 to 1.2.3rc1
+          versionNum=${version%-*}
+          versionRC=${version#$versionNum}
+          versionRC=${versionRC//[-.]/}
+          currentVersion="${versionNum}${versionRC}"
+
+          pip install --upgrade pip
+          for i in $(seq 20)
+          do
+            pip index versions --pre $package > pip_versions.txt
+            pipVersion=$(cat pip_versions.txt | head -n 1 | cut -f2 -d '(' | cut -f1 -d ')')
+            echo "$currentVersion $pipVersion"
+            if [ "$pipVersion" = "$currentVersion" ]
+            then
+              echo "Same version"
+              exit 0
+            fi
+            echo "Wait for PyPI..."
+            sleep 10
+          done
+          echo "Latest version doesn't match after several retries"
+          exit 1
+
+      - id: rollback
+        name: Rollback last commit and remove tag
+        if: steps.wait-for-release.outcome == 'failure'
+        run: |
+          dep_updated=${{ steps.update-dependencies.outputs.dep_updated }}
+          if [ $dep_updated -gt 0 ]
+          then
+            git reset --hard HEAD~2
+          else
+            git reset --hard HEAD~1
+          fi
+          git push -f origin main
+          git tag -d ${{ steps.version.outputs.version }}
+          git push --delete origin ${{ steps.version.outputs.version }}
+
+          # Force to fail
+          exit 1
+        working-directory: ${{ inputs.module_directory }}

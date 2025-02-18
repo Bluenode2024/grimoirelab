@@ -1,0 +1,102 @@
+name: Publish Docker image
+
+on:
+  release:
+    types: [published]
+
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Docker image version"
+        type: string
+        required: true
+
+env:
+  DOCKER_IMAGE_NAME: "grimoirelab/grimoirelab"
+
+jobs:
+  package-ready:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python 3.9
+        uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.1.0
+        with:
+          python-version: 3.9
+
+      - name: Wait for GrimoireLab package ready in PyPI
+        run: |
+          package="grimoirelab"
+          ref_name="${{github.ref_name}}"
+          input_version="${{inputs.version}}"
+          version="${input_version:-$ref_name}"
+          # Format version 1.2.3-rc.1 to 1.2.3rc1
+          versionNum=${version%-*}
+          versionRC=${version#$versionNum}
+          versionRC=${versionRC//[-.]/}
+          currentVersion="${versionNum}${versionRC}"
+
+          pip install --upgrade pip
+          for i in $(seq 20)
+          do
+            pip index versions --pre $package > pip_versions.txt
+            pipVersion=$(cat pip_versions.txt | head -n 1 | cut -f2 -d '(' | cut -f1 -d ')')
+            echo "$currentVersion $pipVersion"
+            if [ "$pipVersion" = "$currentVersion" ]
+            then
+              echo "Same version"
+              exit 0
+            fi
+            echo "Wait for PyPI..."
+            sleep 10
+          done
+          echo "Latest version doesn't match after several retries"
+          exit 1
+
+  build-image:
+    runs-on: ubuntu-latest
+    needs: [package-ready]
+    environment: docker-release
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@11086d25041f77fe8fe7b9ea4e48e3b9192b8f19 # v3.1.2
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
+        with:
+          images: |
+            ${{ env.DOCKER_IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@68827325e0b33c7199eb31dd4e31fbe9023e06e3 # v3.0.0
+        with:
+          platforms: linux/arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@2b51285047da1547ffb1b2203d8be4c0af6b1f20 # v3.2.0
+
+      - name: Login to DockerHub
+        uses: docker/login-action@e92390c5fb421da1463c202d546fed0ec5c39f20 # v3.1.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        id: build-and-push
+        uses: docker/build-push-action@2cdde995de11925a030ce8070c3d77a52ffcf1c0 # v5.3.0
+        with:
+          platforms: linux/amd64,linux/arm64
+          context: "{{defaultContext}}:docker"
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+
+      - name: Sign image with a key
+        run: |
+          echo "${TAGS}" | xargs -I {} cosign sign -y -r --key env://COSIGN_PRIVATE_KEY "{}@${DIGEST}"
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          COSIGN_PRIVATE_KEY: ${{secrets.COSIGN_PRIVATE_KEY}}
+          COSIGN_PASSWORD: ${{secrets.COSIGN_PASSWORD}}
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}

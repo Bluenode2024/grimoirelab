@@ -1,0 +1,44 @@
+# .github/workflows/deploy.yml
+name: Deploy Services
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'projects.json'
+      - 'backend-api/**'
+      - 'grimoirelab/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+      
+      - name: Login to Docker Hub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+      
+      - name: Build and deploy
+        run: |
+          docker-compose up -d --build
+          
+      - name: Health check
+        run: |
+          attempts=0
+          max_attempts=30
+          until $(curl --output /dev/null --silent --head --fail http://localhost:8001/health); do
+            if [ ${attempts} -eq ${max_attempts} ]; then
+              echo "Max attempts reached. Deployment failed."
+              exit 1
+            fi
+            
+            printf '.'
+            attempts=$(($attempts+1))
+            sleep 2
+          done

@@ -1,0 +1,55 @@
+---
+layout: default
+sections:
+  - name: Events
+    link: https://chaoss.github.io/grimoirelab/#events
+  - name: How it works
+    link: https://chaoss.github.io/grimoirelab/#how
+  - name: Components
+    link: https://chaoss.github.io/grimoirelab/#components
+  - name: Built with
+    link: https://chaoss.github.io/grimoirelab/#builtwith
+  - name: About
+    link: https://chaoss.github.io/grimoirelab/#about
+  - name: Docs
+    link: https://chaoss.github.io/grimoirelab-tutorial/
+---
+
+{% include header.html %}
+
+<!-- Portfolio Grid Section -->
+<section class="page-section" id="how">
+  <div class="container text-center">
+    <h2 class="page-section-heading text-uppercase">How it works</h2>
+
+    <div class="row text-left mt-5">
+      <div class="col-lg-5 ml-auto">
+        <p>The aim of this project is to provide an <strong>open source toolkit</strong> for:</p>
+        <ol>
+          <li class="mb-3">Automatic and incremental <b>data gathering</b> from almost any tool (<em>data source</em>) related with contributing to Open Source development (source code management, issue tracking systems, forums, etc.)</li>
+          <li class="mb-3">Automatic gathered <b>data <em>enrichment</em></b>, merging duplicated identities, adding additional information about contributors affiliation, calculation delays, geographical data, etc.</li>
+          <li class="mb-3"><b>Data consumption and visualization</b>, allowing filtering by time range, project, repository, contributor, etc.</li>
+        </ol>
+      </div>
+      <div class="col-lg-7 ml-auto">
+        <img src="img/grimoirelab-all-details.png" alt="GrimoireLab architecture" class="img-fluid">
+      </div>
+    </div>
+
+    <div class="text-center mt-4">
+      <a class="btn btn-xl btn-outline-primary" href="https://github.com/chaoss/grimoirelab/blob/main/README.md">
+        <svg class="bi bi-terminal-fill h2" width="1em" height="1em" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+          <path fill-rule="evenodd" d="M0 3a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H2a2 2 0 01-2-2V3zm9.5 5.5h-3a.5.5 0 000 1h3a.5.5 0 000-1zm-6.354-.354L4.793 6.5 3.146 4.854a.5.5 0 11.708-.708l2 2a.5.5 0 010 .708l-2 2a.5.5 0 01-.708-.708z" clip-rule="evenodd"/>
+        </svg>
+      Start here!</a>
+    </div>
+  </div>
+</section>
+
+{% include data-sources.html %}
+
+{% include components.html %}
+
+{% include built-with.html %}
+
+{% include about.html %}

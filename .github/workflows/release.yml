@@ -1,0 +1,66 @@
+name: release
+
+on:
+  push:
+    tags:
+      - '*.*.*'
+      - '*.*.*-*'
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build package using Poetry and store result
+        uses: chaoss/grimoirelab-github-actions/build@main
+        with:
+          artifact-name: grimoirelab-dist
+          artifact-path: dist
+          pin-dependencies: yes
+
+  tests:
+    needs: [build]
+    runs-on: ubuntu-latest
+
+    name: Python ${{ matrix.python-version }} for ES ${{ matrix.elasticsearch-version }}
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+
+    steps:
+      - name: Download distribution artifact
+        uses: actions/download-artifact@c850b930e6ba138125429b7e5c93fc707a7f8427 # v4.1.4
+        with:
+          name: grimoirelab-dist
+          path: dist
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Check package installed
+        run: |
+          PACKAGE=`(cd dist && ls *whl)` && echo $PACKAGE
+          pip install --pre ./dist/$PACKAGE
+          grimoirelab --version
+
+  release:
+    needs: [tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create a new release on the repository
+        uses: chaoss/grimoirelab-github-actions/release@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    needs: [tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the package on PyPI
+        uses: chaoss/grimoirelab-github-actions/publish@main
+        with:
+          artifact-name: grimoirelab-dist
+          artifact-path: dist
+          pypi-api-token: ${{ secrets.PYPI_API_TOKEN }}
