@@ -5,6 +5,12 @@ import os
 import json
 import logging
 
+try:
+    from werkzeug.urls import quote as url_quote
+except ImportError:
+    from werkzeug.urls import url_quote
+
+
 repo_blueprint = Blueprint('repository', __name__)
 
 GRIMOIRELAB_API_URL = os.getenv('GRIMOIRELAB_API_URL', 'http://grimoirelab-api:9000')

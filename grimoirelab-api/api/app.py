@@ -12,6 +12,12 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+try:
+    from werkzeug.urls import quote as url_quote
+except ImportError:
+    from werkzeug.urls import url_quote
+
 app = Flask(__name__)
 
 # default-grimoirelab-settings의 projects.json 경로 설정
