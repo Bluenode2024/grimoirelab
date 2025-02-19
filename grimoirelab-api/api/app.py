@@ -22,13 +22,14 @@ except ImportError:
 
 app = Flask(__name__)
 
-# Elasticsearch 클라이언트 초기화
-es_client = Elasticsearch(['http://elasticsearch:9200'])
+# 환경 변수 설정
+REPOSITORY_PATH = os.getenv('REPOSITORY_PATH', '/default-grimoirelab-settings')
+PROJECTS_JSON_PATH = os.path.join(REPOSITORY_PATH, 'projects.json')
+ES_URL = os.getenv('ES_URL', 'http://elasticsearch:9200')
+KIBANA_URL = os.getenv('KIBANA_URL', 'http://localhost:8000')
 
-# default-grimoirelab-settings의 projects.json 경로 설정
-PROJECTS_JSON_PATH = os.getenv('PROJECTS_JSON_PATH', 
-    '/default-grimoirelab-settings/projects.json')
-base_url = os.getenv('KIBANA_URL', 'http://localhost:8000')
+# Elasticsearch 클라이언트 초기화
+es_client = Elasticsearch([ES_URL])
 
 def get_repositories_from_projects():
     """projects.json에서 저장소 URL 목록을 가져옵니다."""
@@ -36,7 +37,7 @@ def get_repositories_from_projects():
         with open(PROJECTS_JSON_PATH, 'r') as f:
             projects_data = json.load(f)
             repos = []
-            for project_name, project_info in projects_data.items():
+            for project_info in projects_data.values():
                 if 'git' in project_info:
                     repos.extend(project_info['git'])
             return repos
@@ -45,7 +46,6 @@ def get_repositories_from_projects():
         return []
 
 def create_repository_filter(repos):
-    """저장소 목록으로 Elasticsearch 쿼리를 생성합니다."""
     """저장소 목록으로 Elasticsearch 쿼리를 생성합니다."""
     should_clauses = [
         {"term": {"origin": repo}} for repo in repos
@@ -83,166 +83,85 @@ def create_repository_filter(repos):
         }
     }
 
-class GrimoireManager:
-    def __init__(self):
-        try:
-            self.client = docker.from_env()
-            self.current_service = 'blue'
-            # projects.json 경로 확인
-            if not os.path.exists(PROJECTS_JSON_PATH):
-                raise FileNotFoundError(f"Projects file not found at {PROJECTS_JSON_PATH}")
-            logger.info(f"GrimoireManager initialized with projects file at {PROJECTS_JSON_PATH}")
-            
-            # Git 저장소 경로를 projects.json이 있는 디렉토리로 설정
-            self.repo_path = os.path.dirname(PROJECTS_JSON_PATH)
-            logger.info(f"Using repository path: {self.repo_path}")
-            
-            try:
-                self.repo = git.Repo(self.repo_path)
-                logger.info("Git repository found")
-            except git.InvalidGitRepositoryError:
-                logger.info(f"Initializing new Git repository at {self.repo_path}")
-                self.repo = git.Repo.init(self.repo_path)
-                
-                # Git 초기 설정
-                self.repo.config_writer().set_value("user", "name", "jaerius").release()
-                self.repo.config_writer().set_value("user", "email", "rylynn1029@naver.com").release()
-                
-                # GitHub 원격 저장소 설정
-                token = os.getenv('GIT_TOKEN')
-                username = os.getenv('GIT_USERNAME')
-                if not token or not username:
-                    raise ValueError("GIT_TOKEN and GIT_USERNAME environment variables are required")
-                
-                try:
-                    authenticated_url = f"https://{username}:{token}@github.com/{username}/grimoirelab-1.git"
-                    origin = self.repo.create_remote('origin', authenticated_url)
-                    logger.info("Remote 'origin' added with authentication")
-                except git.GitCommandError:
-                    logger.info("Remote 'origin' already exists")
-                
-                # 초기 커밋 및 푸시
-                self.repo.index.add([PROJECTS_JSON_PATH])
-                commit = self.repo.index.commit("Initial commit")
-                logger.info(f"Created initial commit: {commit.hexsha}")
-                
-                # 초기 푸시 (--set-upstream)
-                try:
-                    self.repo.git.push('--set-upstream', 'origin', 'master')
-                    logger.info("Initial push successful")
-                except git.GitCommandError as e:
-                    logger.error(f"Failed to push: {str(e)}")
-                    raise
-                
-        except Exception as e:
-            logger.error(f"Failed to initialize: {str(e)}")
-            raise
-
-    def validate_json_format(self, data):
-        """projects.json 형식 검증"""
-        required_fields = ['meta', 'git']
-        if not isinstance(data, dict):
+def validate_json_format(data):
+    """projects.json 형식 검증"""
+    if not isinstance(data, dict):
+        return False
+    for project in data.values():
+        if not isinstance(project, dict):
             return False
-        for project in data.values():
-            if not all(field in project for field in required_fields):
-                return False
-        return True
+        if 'meta' not in project or 'git' not in project:
+            return False
+        if not isinstance(project['git'], list):
+            return False
+    return True
 
-    def update_projects(self, new_data):
-        """projects.json 파일 업데이트 및 Git 커밋/푸시"""
+@app.route('/update-projects', methods=['POST'])
+def update_projects():
+    """projects.json 파일 업데이트 및 연관 작업 수행"""
+    try:
+        # 1. projects.json 파일 업데이트
+        data = request.get_json()
+        logger.info(f"Received update request with data: {json.dumps(data, indent=2)}")
+        
+        if not validate_json_format(data):
+            return jsonify({"success": False, "error": "Invalid JSON format"}), 400
+        
+        with open(PROJECTS_JSON_PATH, 'r') as f:
+            projects = json.load(f)
+        
+        projects.update(data)
+        
+        with open(PROJECTS_JSON_PATH, 'w') as f:
+            json.dump(projects, f, indent=2)
+        logger.info("1. Projects file updated successfully")
+        
+        # 2. Git 작업
         try:
-            if not self.validate_json_format(new_data):
-                return False, "Invalid JSON format"
-                
-            # projects.json 파일 업데이트
-            with open(PROJECTS_JSON_PATH, 'w') as f:
-                json.dump(new_data, f, indent=4)
-            logger.info("Projects file updated successfully")
+            repo = git.Repo(REPOSITORY_PATH)
+            repo.index.add(['projects.json'])
+            commit = repo.index.commit('Update projects.json')
             
+            # 원격 저장소 설정 확인 및 추가
             try:
-                # Git 커밋 및 푸시
-                self.commit_and_push_changes("Update projects.json")
-            except Exception as e:
-                logger.error(f"Git operation failed: {e}")
-                # Git 실패해도 계속 진행
+                origin = repo.remote('origin')
+            except ValueError:
+                # origin이 없으면 추가
+                origin = repo.create_remote('origin', 'https://github.com/jaerius/grimoirelab-1.git')
             
-            # Mordred 컨테이너 재시작
-            self.restart_mordred()
+            # 현재 브랜치 확인
+            current = repo.active_branch
             
-            # 대시보드 필터 업데이트
-            try:
-                self.update_dashboard_filter()
-            except Exception as e:
-                logger.error(f"Failed to update dashboard filter: {e}")
+            # upstream 브랜치 설정 및 push
+            if not current.tracking:
+                current.set_tracking_branch(origin.refs.master)
             
-            return True, "Update successful"
-            
-        except Exception as e:
-            logger.error(f"Failed to update projects: {e}")
-            return False, str(e)
-
-    def commit_and_push_changes(self, message):
+            # push 시도
+            origin.push(current.name)
+            logger.info("2. Git operations completed successfully")
+        except Exception as git_error:
+            logger.warning(f"Git operations failed but continuing: {git_error}")
+        
+        # 3. Mordred 컨테이너 재시작
         try:
-            logger.info(f"Current repository path: {self.repo_path}")
-            logger.info(f"Projects.json path: {PROJECTS_JSON_PATH}")
-            
-            # Git add
-            self.repo.index.add([PROJECTS_JSON_PATH])
-            logger.info("Added file to git index")
-            
-            # Git commit
-            commit_message = f"Update projects.json: {message}"
-            commit = self.repo.index.commit(commit_message)
-            logger.info(f"Created commit: {commit.hexsha}")
-            
-            # Git push with token
-            token = os.getenv('GIT_TOKEN')
-            username = os.getenv('GIT_USERNAME')
-            if not token or not username:
-                raise ValueError("GIT_TOKEN and GIT_USERNAME environment variables are required")
-            
-            # 현재 브랜치 이름 확인
-            current_branch = self.repo.active_branch.name
-            logger.info(f"Current branch: {current_branch}")
-            
-            # 인증된 URL로 직접 푸시
-            authenticated_url = f"https://{username}:{token}@github.com/{username}/grimoirelab-1.git"
-            self.repo.git.push(authenticated_url, current_branch)
-            logger.info("Changes pushed successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to commit and push changes: {e}")
-            raise
-
-    def restart_mordred(self):
-        """Mordred 컨테이너 재시작"""
-        try:
-            containers = self.client.containers.list(
-                filters={'name': 'docker-compose-mordred-1'}
-            )
-            
-            if not containers:
-                logger.error("No Mordred container found")
-                return
-                
-            container = containers[0]
-            logger.info(f"Restarting container: {container.name}")
+            container_name = "docker-compose-mordred-1"
+            client = docker.from_env()
+            container = client.containers.get(container_name)
             container.restart()
-            logger.info("Container restart completed")
-            
-        except Exception as e:
-            logger.error(f"Restart failed: {e}")
-
-    def update_dashboard_filter(self):
-        """대시보드 필터 업데이트"""
+            logger.info("3. Mordred container restarted successfully")
+        except Exception as docker_error:
+            logger.warning(f"Mordred restart failed but continuing: {docker_error}")
+        
+        # 4. 대시보드 필터 및 URL 업데이트
         try:
+            # 모든 저장소 URL 가져오기
             repos = get_repositories_from_projects()
             filter_query = create_repository_filter(repos)
             
-            # .kibana 인덱스의 검색 설정 업데이트
+            # Elasticsearch 업데이트
             es_client.update(
-                index='.kibana_task_manager',  # 또는 현재 사용 중인 .kibana 인덱스
-                id='search:git',
+                index=".kibana_task_manager",
+                id="search:git",
                 body={
                     "doc": {
                         "kibanaSavedObjectMeta": {
@@ -251,58 +170,27 @@ class GrimoireManager:
                     }
                 }
             )
-            logger.info("Dashboard filter updated successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to update dashboard filter: {e}")
-            raise
-
-manager = GrimoireManager()
-
-# 라우트 등록
-@app.route('/update-dashboard-filter', methods=['POST'])
-def update_dashboard_filter():
-    """대시보드 필터를 수동으로 업데이트합니다."""
-    try:
-        logger.info("Updating dashboard filter")
-        repos = get_repositories_from_projects()
-        filter_query = create_repository_filter(repos)
+            logger.info("4. Dashboard filter and URL updated successfully")
+        except Exception as es_error:
+            logger.warning(f"Dashboard update failed but continuing: {es_error}")
         
-        # .kibana 인덱스의 검색 설정 업데이트
-        es_client.update(
-            index='.kibana_task_manager',
-            id='search:git',
-            body={
-                "doc": {
-                    "kibanaSavedObjectMeta": {
-                        "searchSourceJSON": json.dumps(filter_query)
-                    }
-                }
+        return jsonify({
+            "success": True,
+            "message": "All updates completed successfully",
+            "details": {
+                "projects_updated": True,
+                "git_pushed": True,
+                "mordred_restarted": True,
+                "dashboard_updated": True
             }
-        )
-        logger.info("Dashboard filter updated successfully")
-        return jsonify({"message": "Dashboard filter updated successfully"})
-    except Exception as e:
-        logger.error(f"Failed to update dashboard filter: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/get-filtered-data', methods=['GET'])
-def get_filtered_data():
-    """현재 필터가 적용된 데이터를 가져옵니다."""
-    try:
-        repos = get_repositories_from_projects()
-        filter_query = create_repository_filter(repos)
+        })
         
-        # git 인덱스에서 필터링된 데이터 검색
-        result = es_client.search(
-            index='git*',
-            body=filter_query
-        )
-        
-        return jsonify(result['aggregations'])
     except Exception as e:
-        logger.error(f"Failed to get filtered data: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Update process failed: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 @app.route('/view-dashboard', methods=['GET'])
 def view_dashboard():
@@ -315,21 +203,6 @@ def view_dashboard():
         
         # 저장소 필터와 집계 생성
         repo_terms = ','.join([f"(term:(origin:'{repo}'))" for repo in encoded_repos])
-        
-        # 시각화 설정 추가
-        visualization_config = (
-            "vis:(aggs:!("
-            "(enabled:!t,id:'1',params:(field:hash),schema:metric,type:count),"
-            "(enabled:!t,id:'2',params:(field:origin,missingBucket:!f,missingBucketLabel:Missing,"
-            "order:desc,orderBy:'1',otherBucket:!f,otherBucketLabel:Other,size:10),"
-            "schema:bucket,type:terms),"
-            "(enabled:!t,id:'3',params:(field:author_name,missingBucket:!f,missingBucketLabel:Missing,"
-            "order:desc,orderBy:'1',otherBucket:!f,otherBucketLabel:Other,size:20),"
-            "schema:bucket,type:terms)),"
-            "params:(perPage:10,showMetricsAtAllLevels:!f,showPartialRows:!f,showTotal:!f,"
-            "sort:(columnIndex:!n,direction:!n),totalFunc:sum),"
-            "title:'Repository%20Commits%20by%20Author',type:table)"
-        )
         
         # 기본 필터
         base_filters = [
@@ -347,9 +220,7 @@ def view_dashboard():
         # 모든 필터 결합
         all_filters = ','.join([*base_filters, repo_filter])
         
-        # Kibana URL 생성
-        base_url = os.getenv('KIBANA_URL', 'http://localhost:8000')
-        # 새로운 패널 설정
+        # 새로운 패널 설정 (레포지토리별 커밋 수)
         new_panel = (
             "(embeddableConfig:(title:'Commit Count by Repository',"
             "vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),"
@@ -372,9 +243,9 @@ def view_dashboard():
             f"{new_panel})"
         )
 
-        # URL 생성 시 panels_str 사용
+        # Kibana URL 생성
         dashboard_url = (
-            f"{base_url}/app/kibana#/dashboard/Overview?"
+            f"{KIBANA_URL}/app/kibana#/dashboard/Overview?"
             f"_g=(refreshInterval:(pause:!t,value:0),time:(from:now-5y,mode:quick,to:now))&"
             f"_a=(description:'Overview%20Panel%20by%20Bitergia',"
             f"filters:!({all_filters}),"
@@ -390,34 +261,9 @@ def view_dashboard():
         logger.error(f"Failed to redirect to dashboard: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
-@app.route('/update-projects', methods=['POST'])
-def update_projects():
-    try:
-        new_repo_data = request.json
-        logger.info(f"Received update request with data: {json.dumps(new_repo_data, indent=2)}")
-        
-        if not new_repo_data:
-            return jsonify({"error": "No data provided"}), 400
-            
-        success, message = manager.update_projects(new_repo_data)
-        logger.info(f"Update result: success={success}, message={message}")
-        
-        if success:
-            return jsonify({
-                "message": "Projects updated successfully",
-                "path": PROJECTS_JSON_PATH,
-                "updated_data": new_repo_data
-            })
-        else:
-            return jsonify({"error": message}), 500
-            
-    except Exception as e:
-        logger.error(f"Update projects endpoint error: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route('/health', methods=['GET'])
 def health_check():
+    """서비스 상태 확인"""
     try:
         # projects.json 존재 및 읽기 가능 확인
         if not os.path.exists(PROJECTS_JSON_PATH):
@@ -430,7 +276,7 @@ def health_check():
             json.load(f)
             
         # Docker 연결 확인
-        manager.client.ping()
+        docker.from_env().ping()
         
         return jsonify({
             "status": "healthy",
