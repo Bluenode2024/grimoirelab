@@ -1,0 +1,42 @@
+{
+  "zk-rollup": {
+    "meta": {
+      "title": "zkrollup-3"
+    },
+    "git": [
+      "https://github.com/jaerius/zkrollup"
+    ]
+  },
+  "POCBE": {
+    "meta": {
+      "title": "POCBE"
+    },
+    "git": [
+      "https://github.com/Bluenode2024/POCBE"
+    ]
+  },
+  "meme": {
+    "meta": {
+      "title": "meme"
+    },
+    "git": [
+      "https://github.com/Bluenode2024/solmarket"
+    ]
+  },
+  "POCSC": {
+    "meta": {
+      "title": "POCSC"
+    },
+    "git": [
+      "https://github.com/Bluenode2024/POCSC"
+    ]
+  },
+  "acrs": {
+    "meta": {
+      "title": "acrs"
+    },
+    "git": [
+      "https://github.com/jaerius/acrs"
+    ]
+  }
+}
