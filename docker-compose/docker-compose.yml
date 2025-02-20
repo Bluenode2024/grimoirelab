@@ -133,7 +133,8 @@ services:
       environment:
         - PROJECTS_JSON_PATH=/default-grimoirelab-settings/projects.json
         - GIT_USERNAME=jaerius
-        - GIT_TOKEN=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
+        - GIT_TOKEN=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
+        - REQUESTS_TIMEOUT=30 
       volumes:
         - ../default-grimoirelab-settings:/default-grimoirelab-settings
         - /var/run/docker.sock:/var/run/docker.sock

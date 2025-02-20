@@ -83,6 +83,130 @@ def create_repository_filter(repos):
         }
     }
 
+def update_visualization_settings(repos):
+    try:
+        # Visualization 설정
+        vis_body = {
+            "type": "visualization",
+            "visualization": {
+                "title": "Repository Authors and Commits",
+                "visState": json.dumps({
+                    "title": "Repository Authors and Commits",
+                    "type": "table",
+                    "params": {
+                        "perPage": 10,
+                        "showPartialRows": False,
+                        "showMetricsAtAllLevels": True,  # 모든 레벨에서 지표 표시
+                        "sort": {"columnIndex": None, "direction": None},
+                        "showTotal": False,
+                        "totalFunc": "sum"
+                    },
+                    "aggs": [
+                        {
+                            "id": "1",
+                            "enabled": True,
+                            "type": "count",
+                            "schema": "metric",
+                            "params": {
+                                "customLabel": "Commits"
+                            }
+                        },
+                        {
+                            "id": "2",
+                            "enabled": True,
+                            "type": "terms",
+                            "schema": "bucket",
+                            "params": {
+                                "field": "origin",
+                                "size": len(repos),
+                                "order": "desc",
+                                "orderBy": "1",
+                                "customLabel": "Repository"
+                            }
+                        },
+                        {
+                            "id": "3",
+                            "enabled": True,
+                            "type": "terms",
+                            "schema": "bucket",
+                            "params": {
+                                "field": "author_name",
+                                "size": 100,
+                                "order": "desc",
+                                "orderBy": "1",
+                                "customLabel": "Author"
+                            }
+                        }
+                    ]
+                }),
+                "uiStateJSON": json.dumps({
+                    "vis": {"params": {"sort": {"columnIndex": 2, "direction": "desc"}}}
+                }),
+                "description": "Repository별 Author의 Commit 수 통계",
+                "version": 1,
+                "kibanaSavedObjectMeta": {
+                    "searchSourceJSON": json.dumps({
+                        "index": "git",
+                        "query": {"match_all": {}},
+                        "filter": []
+                    })
+                }
+            }
+        }
+
+        try:
+            es_client.update(
+                index=".kibana",
+                id="visualization:9672d770-eed8-11ef-9c8a-253e42e7811b",
+                body={"doc": vis_body},
+                doc_type="doc"
+            )
+        except Exception:
+            es_client.index(
+                index=".kibana",
+                id="visualization:9672d770-eed8-11ef-9c8a-253e42e7811b",
+                body=vis_body,
+                doc_type="doc"
+            )
+        
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update visualization: {e}")
+        return False
+
+def update_dashboard_filter(repos):
+    """대시보드 필터 업데이트"""
+    try:
+        filter_query = create_repository_filter(repos)
+        
+        # Elasticsearch 업데이트
+        try:
+            es_client.update(
+                index=".kibana_task_manager",
+                id="search:git",
+                body={
+                    "doc": {
+                        "kibanaSavedObjectMeta": {
+                            "searchSourceJSON": json.dumps(filter_query)
+                        }
+                    }
+                }
+            )
+        except Exception:
+            es_client.index(
+                index=".kibana_task_manager",
+                id="search:git",
+                body={
+                    "kibanaSavedObjectMeta": {
+                        "searchSourceJSON": json.dumps(filter_query)
+                    }
+                }
+            )
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update dashboard filter: {e}")
+        return False
+
 def validate_json_format(data):
     """projects.json 형식 검증"""
     if not isinstance(data, dict):
@@ -122,21 +246,27 @@ def update_projects():
             repo.index.add(['projects.json'])
             commit = repo.index.commit('Update projects.json')
             
+            # 환경 변수에서 자격 증명 가져오기
+            git_username = os.getenv('GIT_USERNAME')
+            git_token = os.getenv('GIT_TOKEN')
+            
+            if not git_username or not git_token:
+                raise ValueError("Git credentials not found in environment variables")
+            
             # 원격 저장소 설정 확인 및 추가
             try:
                 origin = repo.remote('origin')
             except ValueError:
-                # origin이 없으면 추가
-                origin = repo.create_remote('origin', 'https://github.com/jaerius/grimoirelab-1.git')
+                remote_url = f'https://{git_username}:{git_token}@github.com/Bluenode2024/grimoirelab.git'
+                origin = repo.create_remote('origin', remote_url)
             
-            # 현재 브랜치 확인
+            # 기존 URL 업데이트
+            with repo.config_writer() as git_config:
+                git_config.set_value('remote "origin"', 'url', 
+                    f'https://{git_username}:{git_token}@github.com/Bluenode2024/grimoirelab.git')
+            
+            # 현재 브랜치 확인 및 push
             current = repo.active_branch
-            
-            # upstream 브랜치 설정 및 push
-            if not current.tracking:
-                current.set_tracking_branch(origin.refs.master)
-            
-            # push 시도
             origin.push(current.name)
             logger.info("2. Git operations completed successfully")
         except Exception as git_error:
@@ -154,26 +284,14 @@ def update_projects():
         
         # 4. 대시보드 필터 및 URL 업데이트
         try:
-            # 모든 저장소 URL 가져오기
             repos = get_repositories_from_projects()
-            filter_query = create_repository_filter(repos)
-            
-            # Elasticsearch 업데이트
-            es_client.update(
-                index=".kibana_task_manager",
-                id="search:git",
-                body={
-                    "doc": {
-                        "kibanaSavedObjectMeta": {
-                            "searchSourceJSON": json.dumps(filter_query)
-                        }
-                    }
-                }
-            )
-            logger.info("4. Dashboard filter and URL updated successfully")
+            if update_dashboard_filter(repos) and update_visualization_settings(repos):
+                logger.info("4. Dashboard and visualization updated successfully")
+            else:
+                logger.warning("Dashboard or visualization update partially failed")
         except Exception as es_error:
             logger.warning(f"Dashboard update failed but continuing: {es_error}")
-        
+                
         return jsonify({
             "success": True,
             "message": "All updates completed successfully",
