@@ -38,5 +38,13 @@
     "git": [
       "https://github.com/jaerius/acrs"
     ]
+  },
+  "grad": {
+    "meta": {
+      "title": "grad"
+    },
+    "git": [
+      "https://github.com/2024-Grad-Project/BE"
+    ]
   }
 }
