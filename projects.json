@@ -46,5 +46,13 @@
     "git": [
       "https://github.com/Bluenode2024/POCSC"
     ]
+  },
+  "GradCM": {
+    "meta": {
+      "title": "GradCM"
+    },
+    "git": [
+      "https://github.com/2024-Grad-Project/concrete_ml"
+    ]
   }
 }
