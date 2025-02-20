@@ -23,14 +23,6 @@
       "https://github.com/Bluenode2024/solmarket"
     ]
   },
-  "POCSC": {
-    "meta": {
-      "title": "POCSC"
-    },
-    "git": [
-      "https://github.com/Bluenode2024/POCSC"
-    ]
-  },
   "acrs": {
     "meta": {
       "title": "acrs"
@@ -45,6 +37,14 @@
     },
     "git": [
       "https://github.com/2024-Grad-Project/BE"
+    ]
+  },
+  "POCSC": {
+    "meta": {
+      "title": "POCSC"
+    },
+    "git": [
+      "https://github.com/Bluenode2024/POCSC"
     ]
   }
 }
