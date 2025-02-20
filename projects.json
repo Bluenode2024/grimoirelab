@@ -54,5 +54,13 @@
     "git": [
       "https://github.com/2024-Grad-Project/concrete_ml"
     ]
+  },
+  "ETHFE": {
+    "meta": {
+      "title": "ETHFE"
+    },
+    "git": [
+      "https://github.com/jaerius/ETH_SEOUL_FE"
+    ]
   }
 }
