@@ -62,5 +62,13 @@
     "git": [
       "https://github.com/jaerius/ETH_SEOUL_FE"
     ]
+  },
+  "spiro": {
+    "meta": {
+      "title": "spiro"
+    },
+    "git": [
+      "https://github.com/jaerius/spirogrpah"
+    ]
   }
 }
