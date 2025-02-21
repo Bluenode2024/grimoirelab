@@ -85,21 +85,35 @@ def create_repository_filter(repos):
 
 def update_visualization_settings(repos):
     try:
-        # Visualization 설정
         vis_body = {
             "type": "visualization",
             "visualization": {
-                "title": "Repository Authors and Commits",
+                "title": "Repository Contribution Analysis",
                 "visState": json.dumps({
-                    "title": "Repository Authors and Commits",
+                    "title": "Repository Contribution Analysis",
                     "type": "table",
                     "params": {
-                        "perPage": 10,
+                        "perPage": 15,
                         "showPartialRows": False,
-                        "showMetricsAtAllLevels": True,  # 모든 레벨에서 지표 표시
-                        "sort": {"columnIndex": None, "direction": None},
-                        "showTotal": False,
-                        "totalFunc": "sum"
+                        "showMetricsAtAllLevels": True,
+                        "showTotal": True,
+                        "totalFunc": "sum",
+                        "percentageCol": "",
+                        "dimensions": {
+                            "buckets": [
+                                {
+                                    "accessor": 0,
+                                    "format": {"id": "terms"},
+                                    "params": {},
+                                    "aggType": "terms"
+                                }
+                            ],
+                            "metrics": [
+                                {"accessor": 1, "format": {"id": "number"}, "params": {}, "aggType": "count"},
+                                {"accessor": 2, "format": {"id": "number"}, "params": {}, "aggType": "avg"},
+                                {"accessor": 3, "format": {"id": "number"}, "params": {}, "aggType": "sum"}
+                            ]
+                        }
                     },
                     "aggs": [
                         {
@@ -108,7 +122,7 @@ def update_visualization_settings(repos):
                             "type": "count",
                             "schema": "metric",
                             "params": {
-                                "customLabel": "Commits"
+                                "customLabel": "Commit Count"
                             }
                         },
                         {
@@ -117,7 +131,7 @@ def update_visualization_settings(repos):
                             "type": "terms",
                             "schema": "bucket",
                             "params": {
-                                "field": "origin",
+                                "field": "repository",
                                 "size": len(repos),
                                 "order": "desc",
                                 "orderBy": "1",
@@ -130,19 +144,47 @@ def update_visualization_settings(repos):
                             "type": "terms",
                             "schema": "bucket",
                             "params": {
-                                "field": "author_name",
+                                "field": "author_name.keyword",
                                 "size": 100,
                                 "order": "desc",
                                 "orderBy": "1",
                                 "customLabel": "Author"
                             }
+                        },
+                        {
+                            "id": "4",
+                            "enabled": True,
+                            "type": "date_histogram",
+                            "schema": "metric",
+                            "params": {
+                                "field": "grimoire_creation_date",
+                                "interval": "auto",
+                                "customLabel": "Commit Frequency"
+                            }
+                        },
+                        {
+                            "id": "5",
+                            "enabled": True,
+                            "type": "sum",
+                            "schema": "metric",
+                            "params": {
+                                "field": "lines_added",
+                                "customLabel": "Lines Added"
+                            }
+                        },
+                        {
+                            "id": "6",
+                            "enabled": True,
+                            "type": "sum",
+                            "schema": "metric",
+                            "params": {
+                                "field": "lines_removed",
+                                "customLabel": "Lines Removed"
+                            }
                         }
                     ]
                 }),
-                "uiStateJSON": json.dumps({
-                    "vis": {"params": {"sort": {"columnIndex": 2, "direction": "desc"}}}
-                }),
-                "description": "Repository별 Author의 Commit 수 통계",
+                "description": "상세 커밋 분석 대시보드",
                 "version": 1,
                 "kibanaSavedObjectMeta": {
                     "searchSourceJSON": json.dumps({
