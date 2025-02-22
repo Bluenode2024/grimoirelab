@@ -135,8 +135,12 @@ services:
         - GIT_USERNAME=jaerius
         - GIT_TOKEN=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
         - REQUESTS_TIMEOUT=30 
+        - GITHUB_TOKEN=${GITHUB_TOKEN}
+        - ES_URL=http://elasticsearch:9200
+        - KIBANA_URL=http://localhost:5601
       volumes:
         - ../default-grimoirelab-settings:/default-grimoirelab-settings
+        - ../grimoirelab-api:/app
         - /var/run/docker.sock:/var/run/docker.sock
       networks:
         - default
