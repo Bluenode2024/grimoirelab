@@ -83,138 +83,63 @@ def create_repository_filter(repos):
         }
     }
 
-def update_visualization_settings(repos):
+def update_visualization_settings():
+    """시각화 설정 업데이트"""
     try:
-        vis_body = {
-            "type": "visualization",
-            "visualization": {
-                "title": "Repository Contribution Analysis",
-                "visState": json.dumps({
-                    "title": "Repository Contribution Analysis",
-                    "type": "table",
-                    "params": {
-                        "perPage": 15,
-                        "showPartialRows": False,
-                        "showMetricsAtAllLevels": True,
-                        "showTotal": True,
-                        "totalFunc": "sum",
-                        "percentageCol": "",
-                        "dimensions": {
-                            "buckets": [
-                                {
-                                    "accessor": 0,
-                                    "format": {"id": "terms"},
-                                    "params": {},
-                                    "aggType": "terms"
+        visualizations = [
+            {
+                "id": "84ba62f0-f12b-11ef-96e0-ef349c35e0f0",  # 새로운 시각화 ID
+                "type": "visualization",
+                "attributes": {
+                    "title": "Repository Overview",
+                    "visState": json.dumps({
+                        "title": "Repository Overview",
+                        "type": "table",
+                        "params": {
+                            "perPage": 10,
+                            "showPartialRows": False,
+                            "showMetricsAtAllLevels": False,
+                            "sort": {"columnIndex": 1, "direction": "desc"},
+                            "showTotal": True
+                        },
+                        "aggs": [
+                            {
+                                "id": "1",
+                                "enabled": True,
+                                "type": "count",
+                                "schema": "metric",
+                                "params": {"customLabel": "Commits"}
+                            },
+                            {
+                                "id": "2",
+                                "enabled": True,
+                                "type": "terms",
+                                "schema": "bucket",
+                                "params": {
+                                    "field": "origin",
+                                    "size": 50,
+                                    "order": "desc",
+                                    "orderBy": "1",
+                                    "customLabel": "Repository"
                                 }
-                            ],
-                            "metrics": [
-                                {"accessor": 1, "format": {"id": "number"}, "params": {}, "aggType": "count"},
-                                {"accessor": 2, "format": {"id": "number"}, "params": {}, "aggType": "avg"},
-                                {"accessor": 3, "format": {"id": "number"}, "params": {}, "aggType": "sum"}
-                            ]
-                        }
-                    },
-                    "aggs": [
-                        {
-                            "id": "1",
-                            "enabled": True,
-                            "type": "count",
-                            "schema": "metric",
-                            "params": {
-                                "customLabel": "Commit Count"
                             }
-                        },
-                        {
-                            "id": "2",
-                            "enabled": True,
-                            "type": "terms",
-                            "schema": "bucket",
-                            "params": {
-                                "field": "repository",
-                                "size": len(repos),
-                                "order": "desc",
-                                "orderBy": "1",
-                                "customLabel": "Repository"
-                            }
-                        },
-                        {
-                            "id": "3",
-                            "enabled": True,
-                            "type": "terms",
-                            "schema": "bucket",
-                            "params": {
-                                "field": "author_name.keyword",
-                                "size": 100,
-                                "order": "desc",
-                                "orderBy": "1",
-                                "customLabel": "Author"
-                            }
-                        },
-                        {
-                            "id": "4",
-                            "enabled": True,
-                            "type": "date_histogram",
-                            "schema": "metric",
-                            "params": {
-                                "field": "grimoire_creation_date",
-                                "interval": "auto",
-                                "customLabel": "Commit Frequency"
-                            }
-                        },
-                        {
-                            "id": "5",
-                            "enabled": True,
-                            "type": "sum",
-                            "schema": "metric",
-                            "params": {
-                                "field": "lines_added",
-                                "customLabel": "Lines Added"
-                            }
-                        },
-                        {
-                            "id": "6",
-                            "enabled": True,
-                            "type": "sum",
-                            "schema": "metric",
-                            "params": {
-                                "field": "lines_removed",
-                                "customLabel": "Lines Removed"
-                            }
-                        }
-                    ]
-                }),
-                "description": "상세 커밋 분석 대시보드",
-                "version": 1,
-                "kibanaSavedObjectMeta": {
-                    "searchSourceJSON": json.dumps({
-                        "index": "git",
-                        "query": {"match_all": {}},
-                        "filter": []
+                        ]
                     })
                 }
             }
-        }
+        ]
 
-        try:
-            es_client.update(
-                index=".kibana",
-                id="visualization:9672d770-eed8-11ef-9c8a-253e42e7811b",
-                body={"doc": vis_body},
-                doc_type="doc"
-            )
-        except Exception:
+        for vis in visualizations:
             es_client.index(
                 index=".kibana",
-                id="visualization:9672d770-eed8-11ef-9c8a-253e42e7811b",
-                body=vis_body,
+                id=f"visualization:{vis['id']}",
+                body=vis,
                 doc_type="doc"
             )
-        
-        return True
+
     except Exception as e:
-        logger.error(f"Failed to update visualization: {e}")
-        return False
+        logger.error(f"Failed to update visualization settings: {e}")
+        raise
 
 def update_dashboard_filter(repos):
     """대시보드 필터 업데이트"""
@@ -327,7 +252,7 @@ def update_projects():
         # 4. 대시보드 필터 및 URL 업데이트
         try:
             repos = get_repositories_from_projects()
-            if update_dashboard_filter(repos) and update_visualization_settings(repos):
+            if update_dashboard_filter(repos) and update_visualization_settings():
                 logger.info("4. Dashboard and visualization updated successfully")
             else:
                 logger.warning("Dashboard or visualization update partially failed")
@@ -373,45 +298,36 @@ def view_dashboard():
         # 저장소 필터
         repo_filter = (
             "('$state':(store:appState),"
-            "meta:(alias:!n,disabled:!f,index:git,key:size,negate:!f,type:custom,value:'0'),"
+            "meta:(alias:!n,disabled:!f,index:git,key:query,negate:!f,type:custom,value:'%7B%22bool%22:%7B%22should%22:%5B" +
+            ','.join([f"%7B%22term%22:%7B%22origin%22:%22{repo}%22%7D%7D" for repo in encoded_repos]) +
+            "%5D%7D%7D')," +
             f"query:(bool:(should:!({repo_terms}))))"
         )
         
         # 모든 필터 결합
         all_filters = ','.join([*base_filters, repo_filter])
         
-        # 새로운 패널 설정 (레포지토리별 커밋 수)
-        new_panel = (
-            "(embeddableConfig:(title:'Commit Count by Repository',"
-            "vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),"
-            "gridData:(h:20,i:'113',w:48,x:0,y:56),"
-            "id:'9672d770-eed8-11ef-9c8a-253e42e7811b',"
-            "panelIndex:'113',"
-            "title:'Commit Count by Repository',"
-            "type:visualization,"
-            "version:'6.8.6')"
-        )
-
-        # panels 문자열에 새로운 패널 추가
+        # 새로운 패널 레이아웃
         panels_str = (
-            "panels:!((embeddableConfig:(title:Git),gridData:(h:8,i:'1',w:16,x:0,y:20),id:git_main_numbers,panelIndex:'1',title:Git,type:visualization,version:'6.8.6'),"
-            "(embeddableConfig:(title:Commits,vis:(legendOpen:!f)),gridData:(h:8,i:'2',w:16,x:0,y:28),id:git_evolution_commits,panelIndex:'2',title:'Git%20Commits',type:visualization,version:'6.8.6'),"
-            "(embeddableConfig:(title:Authors,vis:(legendOpen:!f)),gridData:(h:8,i:'3',w:16,x:0,y:36),id:git_evolution_authors,panelIndex:'3',title:'Git%20Authors',type:visualization,version:'6.8.6'),"
-            "(embeddableConfig:(title:Organizations),gridData:(h:20,i:'5',w:16,x:16,y:0),id:git_commits_organizations,panelIndex:'5',title:Organizations,type:visualization,version:'6.8.6'),"
-            "(embeddableConfig:(title:'Git%20Top%20Authors',vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),gridData:(h:20,i:'111',w:16,x:0,y:0),id:git_overview_top_authors,panelIndex:'111',title:'Git%20Top%20Authors',type:visualization,version:'6.8.6'),"
-            "(embeddableConfig:(title:'Git%20Top%20Projects',vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),gridData:(h:20,i:'112',w:16,x:32,y:0),id:git_overview_top_projects,panelIndex:'112',title:'Git%20Top%20Projects',type:visualization,version:'6.8.6'),"
-            f"{new_panel})"
+            "panels:!("
+            "(embeddableConfig:(title:Git),gridData:(h:8,i:'1',w:16,x:25,y:52),id:git_main_numbers,panelIndex:'1',title:Git,type:visualization,version:'6.8.6'),"
+            "(embeddableConfig:(title:Commits,vis:(legendOpen:!f)),gridData:(h:8,i:'2',w:16,x:0,y:52),id:git_evolution_commits,panelIndex:'2',title:'Git%20Commits',type:visualization,version:'6.8.6'),"
+            "(embeddableConfig:(title:'Git%20Top%20Authors',vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),gridData:(h:17,i:'111',w:25,x:0,y:20),id:git_overview_top_authors,panelIndex:'111',title:'Git%20Top%20Authors',type:visualization,version:'6.8.6'),"
+            "(embeddableConfig:(title:'Git%20Top%20Projects',vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),gridData:(h:17,i:'112',w:23,x:25,y:20),id:git_overview_top_projects,panelIndex:'112',title:'Git%20Top%20Projects',type:visualization,version:'6.8.6'),"
+            "(embeddableConfig:(),gridData:(h:20,i:'115',w:48,x:0,y:0),id:'84ba62f0-f12b-11ef-96e0-ef349c35e0f0',panelIndex:'115',type:visualization,version:'6.8.6'),"
+            "(embeddableConfig:(),gridData:(h:15,i:'116',w:23,x:25,y:37),id:'8cfe1960-18de-11e9-ba47-d5cbef43f8d3',panelIndex:'116',type:visualization,version:'6.8.6'),"
+            "(embeddableConfig:(vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),gridData:(h:15,i:'117',w:25,x:0,y:37),id:'9672d770-eed8-11ef-9c8a-253e42e7811b',panelIndex:'117',type:visualization,version:'6.8.6'))"
         )
 
         # Kibana URL 생성
         dashboard_url = (
             f"{KIBANA_URL}/app/kibana#/dashboard/Overview?"
             f"_g=(refreshInterval:(pause:!t,value:0),time:(from:now-5y,mode:quick,to:now))&"
-            f"_a=(description:'Overview%20Panel%20by%20Bitergia',"
+            f"_a=(description:'Overview%20Panel%20by%20Jaewon',"
             f"filters:!({all_filters}),"
             f"{panels_str},"
             "fullScreenMode:!f,options:(darkTheme:!f,useMargins:!t),"
-            "query:(language:lucene,query:'*'),timeRestore:!f,title:Overview,viewMode:view)"
+            "query:(language:lucene,query:'*'),timeRestore:!f,title:'Overview%20Jaewon',viewMode:view)"
         )
         
         logger.info(f"Redirecting to dashboard with URL: {dashboard_url}")
