@@ -157,13 +157,9 @@ def setup_elasticsearch_mappings():
             },
             "fields": json.dumps([
                 {"name": "origin", "type": "string", "count": 0, "scripted": False, "indexed": True, "analyzed": False, "doc_values": True},
-                {"name": "author_name", "type": "string", "count": 0, "scripted": False, "indexed": True, "analyzed": True, "doc_values": False},
-                {"name": "author_name.keyword", "type": "string", "count": 0, "scripted": False, "indexed": True, "analyzed": False, "doc_values": True},
+                {"name": "author_name", "type": "string", "count": 0, "scripted": False, "indexed": True, "analyzed": False, "doc_values": True},
                 {"name": "hash", "type": "string", "count": 0, "scripted": False, "indexed": True, "analyzed": False, "doc_values": True},
-                {"name": "grimoire_creation_date", "type": "date", "count": 0, "scripted": False, "indexed": True, "analyzed": False, "doc_values": True},
-                {"name": "lines_added", "type": "long", "count": 0, "scripted": False, "indexed": True, "analyzed": False, "doc_values": True},
-                {"name": "lines_removed", "type": "long", "count": 0, "scripted": False, "indexed": True, "analyzed": False, "doc_values": True},
-                {"name": "files", "type": "long", "count": 0, "scripted": False, "indexed": True, "analyzed": False, "doc_values": True}
+                {"name": "grimoire_creation_date", "type": "date", "count": 0, "scripted": False, "indexed": True, "analyzed": False, "doc_values": True}
             ])
         }
         
