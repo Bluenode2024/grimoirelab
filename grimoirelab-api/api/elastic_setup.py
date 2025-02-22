@@ -19,34 +19,49 @@ def setup_elasticsearch():
             time.sleep(1)
     
     try:
-        # 1. Kibana 인덱스 설정
-        kibana_settings = {
+        # .kibana 인덱스 매핑 설정
+        kibana_mapping = {
             "settings": {
                 "number_of_shards": 1,
-                "number_of_replicas": 0,
-                "index.mapping.total_fields.limit": 2000
+                "number_of_replicas": 0
             },
             "mappings": {
-                "properties": {
-                    "type": {"type": "keyword"},
-                    "dashboard": {"type": "keyword"},
-                    "title": {"type": "text"},
-                    "projectname": {"type": "keyword"},
-                    "search": {"type": "keyword"},
-                    "visualization": {"type": "keyword"}
+                "doc": {  # doc 타입에 대한 매핑
+                    "properties": {
+                        "type": {"type": "keyword"},
+                        "value": {  # value 필드 매핑 추가
+                            "properties": {
+                                "title": {"type": "text"},
+                                "visState": {"type": "text"},
+                                "uiStateJSON": {"type": "text"},
+                                "description": {"type": "text"},
+                                "version": {"type": "integer"},
+                                "kibanaSavedObjectMeta": {
+                                    "properties": {
+                                        "searchSourceJSON": {"type": "text"}
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
-        
-        # Kibana 인덱스 삭제 (있다면)
-        requests.delete(f"{ES_URL}/.kibana")
-        
-        # Kibana 인덱스 생성
-        response = requests.put(
-            f"{ES_URL}/.kibana?include_type_name=true",
-            json=kibana_settings
-        )
-        logger.info(f"Kibana index setup response: {response.text}")
+
+        # .kibana 인덱스 생성 또는 업데이트
+        try:
+            es_client.indices.create(index=".kibana", body=kibana_mapping)
+            logger.info("Created .kibana index with mapping")
+        except Exception as e:
+            if "resource_already_exists_exception" not in str(e):
+                raise
+            # 기존 인덱스가 있다면 매핑 업데이트
+            es_client.indices.put_mapping(
+                index=".kibana",
+                doc_type="doc",
+                body=kibana_mapping["mappings"]["doc"]
+            )
+            logger.info("Updated .kibana index mapping")
         
         # 2. 기본 템플릿 설정
         template = {

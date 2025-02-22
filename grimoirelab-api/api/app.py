@@ -380,12 +380,12 @@ def view_dashboard():
         # 모든 필터 결합
         all_filters = ','.join([*base_filters, repo_filter])
         
-        # 새로운 패널 설정 (레포지토리별 커밋 수)
+        # 새로운 패널 설정
         new_panel = (
             "(embeddableConfig:(title:'Commit Count by Repository',"
             "vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),"
             "gridData:(h:20,i:'113',w:48,x:0,y:56),"
-            "id:'9672d770-eed8-11ef-9c8a-253e42e7811b',"
+            "id:'9672d770-eed8-11ef-9c8a-253e42e7811b',"  # 커스텀 시각화 ID
             "panelIndex:'113',"
             "title:'Commit Count by Repository',"
             "type:visualization,"
@@ -449,6 +449,80 @@ def health_check():
             "status": "unhealthy",
             "error": str(e)
         }), 500
+
+def create_custom_visualization():
+    """커스텀 시각화 생성"""
+    try:
+        # 커스텀 시각화 정의
+        custom_vis = {
+            "type": "visualization",
+            "visualization": {
+                "title": "Commit Count by Repository",
+                "description": "",
+                "version": 1,
+                "kibanaSavedObjectMeta": {
+                    "searchSourceJSON": json.dumps({
+                        "index": "git",
+                        "query": {"language": "lucene", "query": ""},
+                        "filter": []
+                    })
+                },
+                "visState": json.dumps({
+                    "title": "Commit Count by Repository",
+                    "type": "table",
+                    "params": {
+                        "perPage": 10,
+                        "showPartialRows": False,
+                        "showMetricsAtAllLevels": False,
+                        "sort": {"columnIndex": None, "direction": None},
+                        "showTotal": False,
+                        "totalFunc": "sum"
+                    },
+                    "aggs": [
+                        {
+                            "id": "1",
+                            "enabled": True,
+                            "type": "count",
+                            "schema": "metric",
+                            "params": {
+                                "customLabel": "Commits"
+                            }
+                        },
+                        {
+                            "id": "2",
+                            "enabled": True,
+                            "type": "terms",
+                            "schema": "bucket",
+                            "params": {
+                                "field": "origin",
+                                "size": 50,
+                                "order": "desc",
+                                "orderBy": "1",
+                                "customLabel": "Repository"
+                            }
+                        }
+                    ]
+                }),
+                "uiStateJSON": json.dumps({
+                    "vis": {"params": {"sort": {"columnIndex": None, "direction": None}}}
+                })
+            }
+        }
+
+        # Elasticsearch에 시각화 저장
+        es_client.index(
+            index=".kibana",
+            id="visualization:9672d770-eed8-11ef-9c8a-253e42e7811b",
+            body=custom_vis,
+            doc_type="doc"
+        )
+        logger.info("Successfully created custom visualization")
+    except Exception as e:
+        logger.error(f"Failed to create custom visualization: {e}")
+        raise
+
+# 앱 시작 시 시각화 생성
+create_custom_visualization()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=9000)
