@@ -10,6 +10,11 @@ from datetime import datetime
 from elasticsearch import Elasticsearch
 from flask import redirect, url_for
 import urllib.parse
+from api.analyzers.code_quality import CodeQualityAnalyzer
+from github import Github
+from typing import List
+from concurrent.futures import ThreadPoolExecutor
+from api.elastic_setup import setup_elasticsearch_mappings
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +36,9 @@ KIBANA_URL = os.getenv('KIBANA_URL', 'http://localhost:8000')
 # Elasticsearch 클라이언트 초기화
 es_client = Elasticsearch([ES_URL])
 
+# Flask 앱 초기화 후
+setup_elasticsearch_mappings()
+
 def get_repositories_from_projects():
     """projects.json에서 저장소 URL 목록을 가져옵니다."""
     try:
@@ -39,7 +47,10 @@ def get_repositories_from_projects():
             repos = []
             for project_info in projects_data.values():
                 if 'git' in project_info:
-                    repos.extend(project_info['git'])
+                    for repo in project_info['git']:
+                        # GitHub URL을 owner/repo 형식으로 변환
+                        parts = repo.split('/')
+                        repos.append(f"{parts[-2]}/{parts[-1]}")
             return repos
     except Exception as e:
         logger.error(f"Failed to read projects.json: {e}")
@@ -196,18 +207,107 @@ def update_visualization_settings(repos):
             }
         }
 
+        # 코드 품질 시각화 추가
+        code_quality_vis = {
+            "title": "Code Quality Analysis",
+            "type": "visualization",
+            "visualization": {
+                "title": "Repository Code Quality Metrics",
+                "visState": json.dumps({
+                    "title": "Code Quality Analysis",
+                    "type": "metric",
+                    "params": {
+                        "addTooltip": True,
+                        "addLegend": False,
+                        "type": "metric",
+                        "metric": {
+                            "percentageMode": False,
+                            "useRanges": False,
+                            "colorSchema": "Green to Red",
+                            "metricColorMode": "None",
+                            "colorsRange": [
+                                {"from": 0, "to": 10000}
+                            ],
+                            "labels": {
+                                "show": True
+                            },
+                            "style": {
+                                "bgFill": "#000",
+                                "bgColor": False,
+                                "labelColor": False,
+                                "subText": "",
+                                "fontSize": 12
+                            }
+                        }
+                    },
+                    "aggs": [
+                        {
+                            "id": "1",
+                            "enabled": True,
+                            "type": "count",
+                            "schema": "metric",
+                            "params": {
+                                "customLabel": "Security Alerts"
+                            }
+                        },
+                        {
+                            "id": "2",
+                            "enabled": True,
+                            "type": "sum",
+                            "schema": "metric",
+                            "params": {
+                                "field": "importance_score",
+                                "customLabel": "Code Impact Score"
+                            }
+                        },
+                        {
+                            "id": "3",
+                            "enabled": True,
+                            "type": "sum",
+                            "schema": "metric",
+                            "params": {
+                                "field": "critical_file_changes",
+                                "customLabel": "Critical Changes"
+                            }
+                        }
+                    ]
+                }),
+                "description": "코드 품질 및 영향도 분석",
+                "version": 1,
+                "kibanaSavedObjectMeta": {
+                    "searchSourceJSON": json.dumps({
+                        "index": "git",
+                        "query": {"match_all": {}},
+                        "filter": []
+                    })
+                }
+            }
+        }
+
         try:
             es_client.update(
                 index=".kibana",
-                id="visualization:9672d770-eed8-11ef-9c8a-253e42e7811b",
+                id="visualization:git_commits_repositories",
                 body={"doc": vis_body},
+                doc_type="doc"
+            )
+            es_client.update(
+                index=".kibana",
+                id="visualization:code-quality-metrics",
+                body={"doc": code_quality_vis},
                 doc_type="doc"
             )
         except Exception:
             es_client.index(
                 index=".kibana",
-                id="visualization:9672d770-eed8-11ef-9c8a-253e42e7811b",
+                id="visualization:git_commits_repositories",
                 body=vis_body,
+                doc_type="doc"
+            )
+            es_client.index(
+                index=".kibana",
+                id="visualization:code-quality-metrics",
+                body=code_quality_vis,
                 doc_type="doc"
             )
         
@@ -261,6 +361,32 @@ def validate_json_format(data):
         if not isinstance(project['git'], list):
             return False
     return True
+
+def analyze_repository(repo):
+    try:
+        logger.info(f"Starting analysis for repository: {repo}")
+        
+        logger.info("Running CodeQL analysis...")
+        analyzer = CodeQualityAnalyzer(repo)
+        quality_metrics = analyzer.get_codeql_metrics()
+        logger.info(f"CodeQL metrics: {quality_metrics}")
+        
+        logger.info("Getting repository authors...")
+        authors = get_authors_from_repo(repo)
+        logger.info(f"Found authors: {authors}")
+        
+        logger.info("Calculating PageRank and author metrics...")
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            author_metrics = list(executor.map(
+                lambda author: (author, analyzer.get_author_metrics(author)),
+                authors
+            ))
+        logger.info(f"Analysis completed for repository: {repo}")
+            
+        return repo, quality_metrics, author_metrics
+    except Exception as e:
+        logger.error(f"Failed to analyze repository {repo}: {e}")
+        return repo, None, None
 
 @app.route('/update-projects', methods=['POST'])
 def update_projects():
@@ -333,7 +459,34 @@ def update_projects():
                 logger.warning("Dashboard or visualization update partially failed")
         except Exception as es_error:
             logger.warning(f"Dashboard update failed but continuing: {es_error}")
-                
+
+        # 비동기로 저장소 분석
+        repos = get_repositories_from_projects()
+        logger.info(f"Starting analysis for repositories: {repos}")
+        
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            analysis_results = list(executor.map(analyze_repository, repos))
+            
+        # 결과 저장
+        for repo, quality_metrics, author_metrics in analysis_results:
+            if quality_metrics and author_metrics:
+                logger.info(f"Saving analysis results for {repo}")
+                for author, metrics in author_metrics:
+                    try:
+                        es_client.index(
+                            index="git_metrics",
+                            body={
+                                "repository": repo,
+                                "author": author,
+                                "timestamp": datetime.now().isoformat(),
+                                "quality_metrics": quality_metrics,
+                                "author_metrics": metrics
+                            }
+                        )
+                        logger.info(f"Saved metrics for author {author} in {repo}")
+                    except Exception as e:
+                        logger.error(f"Failed to save metrics for {author} in {repo}: {e}")
+
         return jsonify({
             "success": True,
             "message": "All updates completed successfully",
@@ -449,6 +602,23 @@ def health_check():
             "status": "unhealthy",
             "error": str(e)
         }), 500
+
+def get_authors_from_repo(repo_url: str) -> List[str]:
+    """저장소의 모든 커밋 작성자 목록을 가져옵니다."""
+    try:
+        g = Github(os.getenv('GITHUB_TOKEN'))
+        repo = g.get_repo(repo_url)
+        commits = repo.get_commits()
+        
+        authors = set()
+        for commit in commits:
+            if commit.author:
+                authors.add(commit.author.login)
+        
+        return list(authors)
+    except Exception as e:
+        logger.error(f"Failed to get authors from repo {repo_url}: {e}")
+        return []
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=9000)
