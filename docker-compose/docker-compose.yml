@@ -27,13 +27,13 @@ services:
       ports:
         - 9200:9200
       volumes:
-        - elasticsearch_data:/usr/share/elasticsearch/data  # 데이터 볼륨 추가
+        - elasticsearch_data:/usr/share/elasticsearch/data
       environment:
         - ES_JAVA_OPTS=-Xms2g -Xmx2g
         - ANONYMOUS_USER=true
         - "bootstrap.system_call_filter=false"
-        - "discovery.type=single-node"    # 단일 노드 모드 활성화
-        - "xpack.security.enabled=false"  # xpack 보안 비활성화
+        - "discovery.type=single-node"
+        - "xpack.security.enabled=false"
         - "path.data=/usr/share/elasticsearch/data"
       ulimits:                           # 시스템 리소스 제한 설정
         memlock:
@@ -55,9 +55,10 @@ services:
       ports:
         - 5601:5601
       volumes:
-        - kibiter_data:/usr/share/kibiter/data  # 수정됨
-        - kibiter_config:/usr/share/kibiter/.kibiter  # 수정됨
-
+        - kibiter_data:/usr/share/kibiter/data
+        - kibiter_config:/usr/share/kibiter/.kibiter
+        - kibiter_state:/usr/share/kibiter/optimize  # Kibiter 상태 저장
+        - kibiter_saved_objects:/usr/share/kibiter/saved_objects  # 저장된 객체 보존
 
     mordred:
       restart: on-failure:5
@@ -182,6 +183,12 @@ networks:
 volumes:
   sortinghat-static:
   kibiter_data:
+    driver: local
   kibiter_config:
+    driver: local
+  kibiter_state:
+    driver: local
+  kibiter_saved_objects:
+    driver: local
   elasticsearch_data:
     driver: local

@@ -31,6 +31,8 @@ KIBANA_URL = os.getenv('KIBANA_URL', 'http://localhost:8000')
 # Elasticsearch 클라이언트 초기화
 es_client = Elasticsearch([ES_URL])
 
+
+
 def get_repositories_from_projects():
     """projects.json에서 저장소 URL 목록을 가져옵니다."""
     try:
@@ -84,63 +86,69 @@ def create_repository_filter(repos):
     }
 
 def update_visualization_settings():
-    """시각화 설정 업데이트"""
     try:
-        visualizations = [
-            {
-                "id": "84ba62f0-f12b-11ef-96e0-ef349c35e0f0",  # 새로운 시각화 ID
-                "type": "visualization",
-                "attributes": {
+        visualization = {
+            "type": "visualization",
+            "attributes": {
+                "title": "Repository Overview",
+                "visState": json.dumps({
                     "title": "Repository Overview",
-                    "visState": json.dumps({
-                        "title": "Repository Overview",
-                        "type": "table",
-                        "params": {
-                            "perPage": 10,
-                            "showPartialRows": False,
-                            "showMetricsAtAllLevels": False,
-                            "sort": {"columnIndex": 1, "direction": "desc"},
-                            "showTotal": True
+                    "type": "table",
+                    "params": {
+                        "perPage": 10,
+                        "showPartialRows": False,
+                        "showMetricsAtAllLevels": False,
+                        "sort": {"columnIndex": 1, "direction": "desc"},
+                        "showTotal": True,
+                        "totalFunc": "sum"
+                    },
+                    "aggs": [
+                        {
+                            "id": "1",
+                            "enabled": True,
+                            "type": "count",
+                            "schema": "metric",
+                            "params": {"customLabel": "Commits"}
                         },
-                        "aggs": [
-                            {
-                                "id": "1",
-                                "enabled": True,
-                                "type": "count",
-                                "schema": "metric",
-                                "params": {"customLabel": "Commits"}
-                            },
-                            {
-                                "id": "2",
-                                "enabled": True,
-                                "type": "terms",
-                                "schema": "bucket",
-                                "params": {
-                                    "field": "origin",
-                                    "size": 50,
-                                    "order": "desc",
-                                    "orderBy": "1",
-                                    "customLabel": "Repository"
-                                }
+                        {
+                            "id": "2",
+                            "enabled": True,
+                            "type": "terms",
+                            "schema": "bucket",
+                            "params": {
+                                "field": "origin",
+                                "size": 50,
+                                "order": "desc",
+                                "orderBy": "1",
+                                "customLabel": "Repository"
                             }
-                        ]
+                        }
+                    ]
+                }),
+                "uiStateJSON": "{}",
+                "description": "",
+                "version": 1,
+                "kibanaSavedObjectMeta": {
+                    "searchSourceJSON": json.dumps({
+                        "index": "git",
+                        "query": {"match_all": {}},
+                        "filter": []
                     })
                 }
             }
-        ]
+        }
 
-        for vis in visualizations:
-            es_client.index(
-                index=".kibana",
-                id=f"visualization:{vis['id']}",
-                body=vis,
-                doc_type="doc"
-            )
+        es_client.index(
+            index=".kibana",
+            id="visualization:git-overview",
+            document=visualization
+        )
 
+        return True
     except Exception as e:
         logger.error(f"Failed to update visualization settings: {e}")
-        raise
-
+        return False
+        
 def update_dashboard_filter(repos):
     """대시보드 필터 업데이트"""
     try:
@@ -262,6 +270,9 @@ def update_projects():
         # 5. PageRank 계산 및 시각화 업데이트
         try:
             logger.info("Starting PageRank calculation...")
+            # Elasticsearch 매핑 설정
+            setup_elasticsearch_mapping()
+            # PageRank 계산
             calculate_repository_pagerank()
             logger.info("5. PageRank calculation completed successfully")
         except Exception as pr_error:
@@ -323,11 +334,11 @@ def view_dashboard():
             "(embeddableConfig:(title:Commits,vis:(legendOpen:!f)),gridData:(h:8,i:'2',w:16,x:0,y:52),id:git_evolution_commits,panelIndex:'2',title:'Git%20Commits',type:visualization,version:'6.8.6'),"
             "(embeddableConfig:(title:'Git%20Top%20Authors',vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),gridData:(h:17,i:'111',w:25,x:0,y:20),id:git_overview_top_authors,panelIndex:'111',title:'Git%20Top%20Authors',type:visualization,version:'6.8.6'),"
             "(embeddableConfig:(title:'Git%20Top%20Projects',vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),gridData:(h:17,i:'112',w:23,x:25,y:20),id:git_overview_top_projects,panelIndex:'112',title:'Git%20Top%20Projects',type:visualization,version:'6.8.6'),"
-            "(embeddableConfig:(),gridData:(h:20,i:'115',w:48,x:0,y:0),id:'84ba62f0-f12b-11ef-96e0-ef349c35e0f0',panelIndex:'115',type:visualization,version:'6.8.6'),"
+            "(embeddableConfig:(title:'Repository Overview'),gridData:(h:20,i:'115',w:48,x:0,y:0),id:'2f5869c0-f1b6-11ef-a51e-59ace05a8f4f',panelIndex:'115',title:'Repository%20Overview',type:visualization,version:'6.8.6'),"
             "(embeddableConfig:(),gridData:(h:15,i:'116',w:23,x:25,y:37),id:'8cfe1960-18de-11e9-ba47-d5cbef43f8d3',panelIndex:'116',type:visualization,version:'6.8.6'),"
             "(embeddableConfig:(vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),gridData:(h:15,i:'117',w:25,x:0,y:37),id:'9672d770-eed8-11ef-9c8a-253e42e7811b',panelIndex:'117',type:visualization,version:'6.8.6'),"
-            "(embeddableConfig:(title:'Developer Impact Analysis'),gridData:(h:20,i:'118',w:48,x:0,y:60),"
-            "id:'git-pagerank-analysis',panelIndex:'118',title:'Developer%20Impact%20Analysis',type:visualization,version:'6.8.6'))"
+            "(embeddableConfig:(title:'Developer Impact Analysis'),gridData:(h:20,i:'118',w:48,x:0,y:60),id:'991fe4b0-f1ba-11ef-b3d0-09b31acaa3cf',panelIndex:'118',type:visualization,version:'6.8.6')"
+            ")"
         )
 
         # Kibana URL 생성
@@ -738,108 +749,113 @@ def calculate_composite_score(file_weight, author_weight):
     )
 
 def save_pagerank_results(repo, author_scores):
-    """PageRank 결과를 Elasticsearch에 저장"""
+    """PageRank 결과를 git 인덱스에 업데이트"""
     try:
-        # 결과를 저장할 인덱스 생성
-        index_name = "git_pagerank"
-        if not es_client.indices.exists(index=index_name):
-            mapping = {
-                "mappings": {
-                    "properties": {
-                        "repository": {"type": "keyword"},
-                        "author": {"type": "keyword"},
-                        "pagerank_score": {"type": "float"},
-                        "complexity_score": {"type": "float"},
-                        "quality_score": {"type": "float"},
-                        "participation_score": {"type": "float"},
-                        "timestamp": {"type": "date"}
-                    }
-                }
-            }
-            es_client.indices.create(index=index_name, body=mapping)
-
-        # 결과 저장
         bulk_data = []
-        timestamp = datetime.now().isoformat()
-        
         for author, score in author_scores.items():
-            bulk_data.append({
-                "index": {
-                    "_index": index_name,
-                    "_id": f"{repo}_{author}_{timestamp}"
+            # 업데이트 쿼리
+            bulk_data.extend([
+                {
+                    "update": {
+                        "_index": "git",
+                        "_id": f"{repo}_{author}",  # 문서 ID 생성
+                        "retry_on_conflict": 3
+                    }
+                },
+                {
+                    "doc": {
+                        "pagerank_score": float(score)
+                    },
+                    "doc_as_upsert": True
                 }
-            })
-            bulk_data.append({
-                "repository": repo,
-                "author": author,
-                "pagerank_score": score,
-                "timestamp": timestamp
-            })
-
+            ])
+        
         if bulk_data:
             es_client.bulk(body=bulk_data)
-            logger.info(f"Saved PageRank results for {repo}")
-
-        # 인덱스 패턴 생성
-        create_pagerank_index_pattern()
-
-        # 시각화 생성/업데이트
-        create_pagerank_visualizations()
-
+            logger.info(f"Successfully updated PageRank scores for {len(author_scores)} authors in {repo}")
+            
+        return True
     except Exception as e:
-        logger.error(f"Failed to save PageRank results: {e}")
-        raise
+        logger.error(f"Failed to update PageRank data: {e}")
+        return False
 
-def create_pagerank_visualizations():
-    """PageRank 시각화 생성"""
+def create_pagerank_visualization():
+    """Developer Impact Analysis 시각화 생성"""
     try:
         visualization = {
             "type": "visualization",
-            "visualization": {
-                "title": "Developer Impact by Repository",
+            "id": "991fe4b0-f1ba-11ef-b3d0-09b31acaa3cf",
+            "attributes": {
+                "title": "Developer Impact Analysis",
                 "description": "",
                 "version": 1,
                 "kibanaSavedObjectMeta": {
                     "searchSourceJSON": json.dumps({
-                        "index": "git_pagerank",
-                        "query": {"query": "", "language": "lucene"},
+                        "index": "git",
+                        "query": {
+                            "query": "",
+                            "language": "lucene"
+                        },
                         "filter": []
                     })
                 },
                 "visState": json.dumps({
-                    "title": "Developer Impact by Repository",
-                    "type": "table",
+                    "title": "Developer Impact Analysis",
+                    "type": "metric",
                     "params": {
-                        "perPage": 20,
-                        "showPartialRows": False,
-                        "showTotal": True,
-                        "sort": {"columnIndex": 2, "direction": "desc"}
+                        "addTooltip": True,
+                        "addLegend": False,
+                        "type": "table",
+                        "metric": {
+                            "percentageMode": False,
+                            "useRanges": False,
+                            "colorSchema": "Green to Red",
+                            "metricColorMode": "None",
+                            "colorsRange": [
+                                {"from": 0, "to": 10000}
+                            ],
+                            "labels": {"show": True},
+                            "invertColors": False,
+                            "style": {
+                                "bgFill": "#000",
+                                "bgColor": False,
+                                "labelColor": False,
+                                "subText": "",
+                                "fontSize": 60
+                            }
+                        }
                     },
                     "aggs": [
                         {
                             "id": "1",
                             "enabled": True,
                             "type": "terms",
-                            "schema": "bucket",
+                            "schema": "group",
                             "params": {
-                                "field": "repository.keyword",
-                                "size": 10,
+                                "field": "origin",
+                                "orderBy": "2",
                                 "order": "desc",
-                                "orderBy": "_key",
-                                "customLabel": "Repository"
+                                "size": 10,
+                                "otherBucket": False,
+                                "otherBucketLabel": "Other",
+                                "missingBucket": False,
+                                "missingBucketLabel": "Missing"
                             }
                         },
                         {
                             "id": "2",
                             "enabled": True,
                             "type": "terms",
-                            "schema": "bucket",
+                            "schema": "group",
                             "params": {
-                                "field": "author.keyword",
-                                "size": 20,
-                                "order": "desc",
+                                "field": "author_name.keyword",
                                 "orderBy": "3",
-                                "customLabel": "Developer"
+                                "order": "desc",
+                                "size": 20,
+                                "otherBucket": False,
+                                "otherBucketLabel": "Other",
+                                "missingBucket": False,
+                                "missingBucketLabel": "Missing"
                             }
                         },
                         {
@@ -855,45 +871,256 @@ def create_pagerank_visualizations():
                     ]
                 }),
                 "uiStateJSON": json.dumps({
-                    "vis": {"params": {"sort": {"columnIndex": 2, "direction": "desc"}}}
+                    "vis": {
+                        "params": {
+                            "sort": {
+                                "columnIndex": 2,
+                                "direction": "desc"
+                            }
+                        }
+                    }
                 })
+            }
+        }
+
+        # 기존 시각화 삭제 (있다면)
+        try:
+            es_client.delete(
+                index=".kibana",
+                id="visualization:git-pagerank",
+                ignore=[404]
+            )
+        except Exception as e:
+            logger.warning(f"Failed to delete existing visualization: {e}")
+
+        # 새로운 시각화 생성
+        es_client.index(
+            index=".kibana",
+            id="visualization:git-pagerank",
+            document=visualization
+        )
+
+        logger.info("Successfully created Developer Impact Analysis visualization")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to create Developer Impact Analysis visualization: {e}")
+        return False
+
+def create_pagerank_index_pattern():
+    """PageRank 인덱스 패턴 생성"""
+    try:
+        # 1. 먼저 git 인덱스의 매핑 정보 가져오기
+        mapping = es_client.indices.get_mapping(index="git")
+        
+        # 2. scripted fields 정의
+        scripted_fields = {
+            "pagerank_score": {
+                "name": "pagerank_score",
+                "script": {
+                    "source": "doc['pagerank_score'].size() == 0 ? 0.5 : doc['pagerank_score'].value",
+                    "lang": "painless"
+                },
+                "type": "number",
+                "lang": "painless"
+            },
+            "painless_inverted_lines_removed_git": {
+                "name": "painless_inverted_lines_removed_git",
+                "script": {
+                    "source": "return doc['lines_removed'].value * -1",
+                    "lang": "painless"
+                },
+                "type": "number",
+                "lang": "painless"
+            }
+        }
+        
+        # 3. 인덱스 패턴 생성
+        index_pattern = {
+            "type": "index-pattern",
+            "index-pattern": {
+                "title": "git*",
+                "timeFieldName": "grimoire_creation_date",
+                "intervalName": "days",
+                "fields": json.dumps(mapping["git"]["mappings"]["properties"]),
+                "sourceFilters": "[]",
+                "fieldFormatMap": "{}",
+                "scripted_fields": scripted_fields  # scripted fields 추가
+            }
+        }
+        
+        # 4. 인덱스 패턴 저장
+        es_client.index(
+            index=".kibana",
+            id="index-pattern:git",
+            body=index_pattern,
+            refresh=True  # 즉시 반영을 위해 refresh 옵션 추가
+        )
+        
+        logger.info("Created git index pattern with scripted fields")
+        
+    except Exception as e:
+        logger.error(f"Failed to create index pattern: {e}")
+        raise
+
+def setup_elasticsearch_mapping():
+    try:
+        # 1. git 인덱스 매핑에 pagerank_score 필드 추가
+        git_mapping = {
+            "properties": {
+                "pagerank_score": {
+                    "type": "float",
+                    "script": {
+                        "lang": "painless",
+                        "source": "doc['pagerank_score'].size() == 0 ? 0.5 : doc['pagerank_score'].value"
+                    }
+                },
+                "lines_changed": {"type": "long"},
+                "files": {"type": "long"}
+            }
+        }
+
+        # 2. git 매핑 업데이트
+        es_client.indices.put_mapping(
+            index="git",
+            body=git_mapping,
+            include_type_name=True
+        )
+
+        # 3. 인덱스 패턴 생성 (scripted fields 포함)
+        create_pagerank_index_pattern()
+
+        # 4. 기본 인덱스 설정 저장
+        config = {
+            "type": "config",
+            "config": {
+                "defaultIndex": "git"
+            }
+        }
+        
+        es_client.index(
+            index=".kibana",
+            id="config:6.8.6",
+            body={
+                "type": "config",
+                "config": {
+                    "defaultIndex": "git",
+                    "scripted_fields_preserve": True  # 스크립트 필드 보존 설정
+                }
+            },
+            refresh=True
+        )
+
+        # 5. 시각화 생성
+        create_network_visualization()
+        create_pagerank_visualization()
+
+        logger.info("Successfully updated Elasticsearch mapping and visualizations")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to setup Elasticsearch: {e}")
+        return False
+
+def create_network_visualization():
+    """Network Core Developer 시각화 생성"""
+    try:
+        visualization = {
+            "type": "visualization",
+            "attributes": {
+                "title": "Network Core Developer",
+                "visState": json.dumps({
+                    "title": "Network Core Developer",
+                    "type": "network",
+                    "params": {
+                        "type": "circle",
+                        "showLabels": True,
+                        "showLegend": True,
+                        "legendPosition": "right",
+                        "nodeSize": "metric",
+                        "edgeSize": "metric",
+                        "interval": "auto",  # 시간 간격 설정 추가
+                        "timeRange": {       # 시간 범위 설정 추가
+                            "from": "now-5y",
+                            "to": "now"
+                        }
+                    },
+                    "aggs": [
+                        {
+                            "id": "1",
+                            "enabled": True,
+                            "type": "sum",
+                            "schema": "metric",
+                            "params": {
+                                "field": "files",
+                                "customLabel": "Files"
+                            }
+                        },
+                        {
+                            "id": "2",
+                            "enabled": True,
+                            "type": "terms",
+                            "schema": "node",
+                            "params": {
+                                "field": "author_name.keyword",
+                                "size": 20,
+                                "order": "desc",
+                                "orderBy": "_key",
+                                "customLabel": "Authors",
+                                "minDocCount": 1  # 최소 문서 수 설정 추가
+                            }
+                        },
+                        {
+                            "id": "3",
+                            "enabled": True,
+                            "type": "sum",
+                            "schema": "metric",
+                            "params": {
+                                "field": "lines_changed",
+                                "customLabel": "Lines Changed"
+                            }
+                        },
+                        {
+                            "id": "4",
+                            "enabled": True,
+                            "type": "terms",
+                            "schema": "relation",
+                            "params": {
+                                "field": "repo_name",
+                                "size": 5,
+                                "order": "desc",
+                                "orderBy": "1",
+                                "customLabel": "Repositories",
+                                "minDocCount": 1  # 최소 문서 수 설정 추가
+                            }
+                        }
+                    ]
+                }),
+                "uiStateJSON": "{}",
+                "description": "",
+                "version": 1,
+                "kibanaSavedObjectMeta": {
+                    "searchSourceJSON": json.dumps({
+                        "index": "git",
+                        "query": {"query": "*", "language": "lucene"},
+                        "filter": []
+                    })
+                }
             }
         }
 
         # 시각화 저장
         es_client.index(
             index=".kibana",
-            id="visualization:git-pagerank-analysis",
+            id="2f5869c0-f1b6-11ef-a51e-59ace05a8f4f",
             body=visualization,
             doc_type="doc"
         )
 
-        logger.info("Created PageRank visualization")
+        logger.info("Created Network Core Developer visualization")
 
     except Exception as e:
-        logger.error(f"Failed to create PageRank visualization: {e}")
-        raise
-
-def create_pagerank_index_pattern():
-    """PageRank 인덱스 패턴 생성"""
-    try:
-        index_pattern = {
-            "type": "index-pattern",
-            "index-pattern": {
-                "title": "git_pagerank*",
-                "timeFieldName": "timestamp"
-            }
-        }
-        
-        es_client.index(
-            index=".kibana",
-            id="index-pattern:git_pagerank",
-            body=index_pattern,
-            doc_type="doc"
-        )
-        logger.info("Created PageRank index pattern")
-    except Exception as e:
-        logger.error(f"Failed to create index pattern: {e}")
+        logger.error(f"Failed to create Network visualization: {e}")
         raise
 
 if __name__ == '__main__':
