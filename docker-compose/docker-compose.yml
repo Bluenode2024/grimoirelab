@@ -26,12 +26,15 @@ services:
       command: elasticsearch -Enetwork.bind_host=0.0.0.0 -Ehttp.max_content_length=2000mb
       ports:
         - 9200:9200
+      volumes:
+        - elasticsearch_data:/usr/share/elasticsearch/data  # 데이터 볼륨 추가
       environment:
         - ES_JAVA_OPTS=-Xms2g -Xmx2g
         - ANONYMOUS_USER=true
         - "bootstrap.system_call_filter=false"
         - "discovery.type=single-node"    # 단일 노드 모드 활성화
         - "xpack.security.enabled=false"  # xpack 보안 비활성화
+        - "path.data=/usr/share/elasticsearch/data"
       ulimits:                           # 시스템 리소스 제한 설정
         memlock:
           soft: -1
@@ -180,3 +183,5 @@ volumes:
   sortinghat-static:
   kibiter_data:
   kibiter_config:
+  elasticsearch_data:
+    driver: local
