@@ -11,6 +11,7 @@ from elasticsearch import Elasticsearch
 from flask import redirect, url_for
 import urllib.parse
 from math import exp
+import requests
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -787,12 +788,8 @@ def calculate_composite_score(file_weight, author_weight):
     return sigmoid(final_score)
 
 def save_pagerank_results(repo, author_scores):
-    """PageRank 결과를 git 인덱스에 업데이트"""
     try:
-        logger.info(f"Saving PageRank scores for repo: {repo}")
-        logger.info(f"Author scores: {author_scores}")  # 저장할 점수 확인
-
-        # 먼저 해당 저장소의 모든 커밋 문서 가져오기
+        # 1. 해당 저장소의 모든 커밋 문서 가져오기
         commits = es_client.search(
             index="git",
             body={
@@ -803,86 +800,99 @@ def save_pagerank_results(repo, author_scores):
                         ]
                     }
                 },
-                "_source": ["author_name", "author_uuid"],
+                "_source": ["author_name", "author_uuid", "author_id", "author_org_name", "author_domain"],
                 "size": 10000
             }
         )
-        logger.info(f"Found {len(commits['hits']['hits'])} commits")
 
-        # author_uuid와 author_name 매핑
-        author_mapping = {}
+        # 2. author_uuid와 author_name 매핑 (가장 많이 사용된 이름 선택)
+        author_names = {}
         for hit in commits['hits']['hits']:
-            author_uuid = hit['_source'].get('author_uuid')
-            author_name = hit['_source'].get('author_name')
+            source = hit['_source']
+            author_uuid = source.get('author_uuid')
+            author_name = source.get('author_name')
+            
             if author_uuid and author_name:
-                author_mapping[author_uuid] = author_name
-        logger.info(f"Author mapping: {author_mapping}")  # 매핑 정보 확인
+                if author_uuid not in author_names:
+                    author_names[author_uuid] = {}
+                if author_name not in author_names[author_uuid]:
+                    author_names[author_uuid][author_name] = 0
+                author_names[author_uuid][author_name] += 1
 
+        # 가장 많이 사용된 이름 선택
+        author_mapping = {}
+        for uuid, names in author_names.items():
+            most_common_name = max(names.items(), key=lambda x: x[1])[0]
+            author_mapping[uuid] = most_common_name
+
+        # 3. 각 저자별로 문서 생성
         bulk_data = []
         for author_uuid, score in author_scores.items():
             author_name = author_mapping.get(author_uuid)
-            if author_name:
-                doc_id = f"{repo}_{author_name}".replace('/', '_').replace(':', '_')
-                logger.info(f"Creating document for {author_name} with score {score}")
-                
-                bulk_data.extend([
-                    {
-                        "index": {
-                            "_index": "git",
-                            "_id": doc_id
-                        }
-                    },
-                    {
-                        "author_name": author_name,
-                        "author_uuid": author_uuid,
-                        "origin": repo,
-                        "pagerank_score": float(score),
-                        "grimoire_creation_date": datetime.now().isoformat()
-                    }
-                ])
+            if not author_name:  # SortingHat에서 이름 가져오기 시도
+                try:
+                    author_name = get_author_name_from_sortinghat(author_uuid)
+                except:
+                    author_name = author_uuid  # 마지막 수단으로 UUID 사용
 
+            doc_id = f"{repo}_{author_name}".replace('/', '_').replace(':', '_')
+            bulk_data.extend([
+                {
+                    "index": {
+                        "_index": "git",
+                        "_id": doc_id
+                    }
+                },
+                {
+                    "author_name": author_name,
+                    "author_uuid": author_uuid,
+                    "origin": repo,
+                    "pagerank_score": float(score),
+                    "grimoire_creation_date": datetime.now().isoformat()
+                }
+            ])
+
+        # 4. bulk update로 저장
         if bulk_data:
-            # bulk update 실행
             response = es_client.bulk(body=bulk_data, refresh=True)
-            logger.info(f"Bulk update response: {response}")  # bulk 업데이트 응답 확인
+            if response.get('errors'):
+                logger.error(f"Bulk update had errors: {response}")
 
         return True
     except Exception as e:
         logger.error(f"Failed to save PageRank scores: {e}")
         return False
 
+def get_author_name_from_sortinghat(uuid):
+    """SortingHat에서 저자 이름 가져오기"""
+    try:
+        # SortingHat API 호출
+        response = requests.get(f"http://nginx:8000/identities/api/identities/{uuid}")
+        data = response.json()
+        return data.get('name', uuid)
+    except:
+        return uuid
+
 def create_pagerank_visualization():
     try:
         visualization = {
             "type": "visualization",
             "attributes": {
-                "title": "Developer Impact Analysis",
+                "title": "Repository Developer Impact Analysis",
                 "visState": json.dumps({
-                    "title": "Developer Impact Analysis",
+                    "title": "Repository Developer Impact Analysis",
                     "type": "table",
                     "params": {
-                        "perPage": 20,
+                        "perPage": 10,
+                        "showMetricsAtAllLevels": True,
                         "showPartialRows": False,
-                        "showMetricsAtAllLevels": False,
+                        "showTotal": False,
                         "sort": {"columnIndex": 1, "direction": "desc"},
-                        "showTotal": False
+                        "totalFunc": "sum"
                     },
                     "aggs": [
                         {
                             "id": "1",
-                            "enabled": True,
-                            "type": "terms",
-                            "schema": "bucket",
-                            "params": {
-                                "field": "author_name.keyword",
-                                "size": 20,
-                                "order": "desc",
-                                "orderBy": "2",
-                                "customLabel": "Author"
-                            }
-                        },
-                        {
-                            "id": "2",
                             "enabled": True,
                             "type": "max",
                             "schema": "metric",
@@ -892,7 +902,33 @@ def create_pagerank_visualization():
                             }
                         },
                         {
+                            "id": "2",
+                            "enabled": True,
+                            "type": "terms",
+                            "schema": "bucket",
+                            "params": {
+                                "field": "origin.keyword",
+                                "size": 10,
+                                "order": "desc",
+                                "orderBy": "1",
+                                "customLabel": "Repository"
+                            }
+                        },
+                        {
                             "id": "3",
+                            "enabled": True,
+                            "type": "terms",
+                            "schema": "bucket",
+                            "params": {
+                                "field": "author_name.keyword",
+                                "size": 5,
+                                "order": "desc",
+                                "orderBy": "1",
+                                "customLabel": "Author"
+                            }
+                        },
+                        {
+                            "id": "4",
                             "enabled": True,
                             "type": "count",
                             "schema": "metric",
@@ -901,13 +937,6 @@ def create_pagerank_visualization():
                             }
                         }
                     ]
-                }),
-                "uiStateJSON": json.dumps({
-                    "vis": {
-                        "params": {
-                            "sort": {"columnIndex": 1, "direction": "desc"}
-                        }
-                    }
                 })
             }
         }
@@ -988,7 +1017,15 @@ def setup_elasticsearch_mapping():
             "mappings": {
                 "properties": {
                     "pagerank_score": {
-                        "type": "float"
+                        "type": "float",
+                        "index": True,  # 검색 가능하도록 설정
+                        "doc_values": True  # 집계 가능하도록 설정
+                    },
+                    "author_name": {
+                        "type": "keyword"  # 정확한 매칭과 집계를 위해 keyword 타입 사용
+                    },
+                    "origin": {
+                        "type": "keyword"  # 저장소 URL도 keyword 타입으로
                     },
                     "lines_changed": {"type": "long"},
                     "files": {"type": "long"}
@@ -996,11 +1033,19 @@ def setup_elasticsearch_mapping():
             }
         }
 
-        # 2. git 매핑 업데이트 (include_type_name 제거)
-        es_client.indices.put_mapping(
-            index="git",
-            body=git_mapping["mappings"]
-        )
+        # 2. 기존 인덱스가 있다면 삭제하고 다시 생성
+        if es_client.indices.exists(index="git"):
+            # 매핑 업데이트
+            es_client.indices.put_mapping(
+                index="git",
+                body=git_mapping["mappings"]
+            )
+        else:
+            # 새로운 인덱스 생성
+            es_client.indices.create(
+                index="git",
+                body=git_mapping
+            )
 
         # 3. 인덱스 패턴 생성
         create_pagerank_index_pattern()
@@ -1008,7 +1053,7 @@ def setup_elasticsearch_mapping():
         # 4. 설정 저장
         es_client.index(
             index=".kibana",
-            id="config:7.17.13",  # 버전 업데이트
+            id="config:7.17.13",
             document={
                 "type": "config",
                 "config": {
@@ -1023,6 +1068,7 @@ def setup_elasticsearch_mapping():
         create_network_visualization()
         create_pagerank_visualization()
 
+        logger.info("Successfully setup Elasticsearch mapping and visualizations")
         return True
 
     except Exception as e:
@@ -1160,6 +1206,41 @@ def get_pagerank(author):
 @app.route('/api/pagerank', methods=['GET'])
 def get_all_pagerank():
     try:
+        # 1. 먼저 모든 커밋에서 author_uuid와 author_name 매핑 가져오기
+        mapping_query = {
+            "size": 10000,
+            "_source": ["author_uuid", "author_name"],
+            "query": {
+                "bool": {
+                    "must": [
+                        {"exists": {"field": "author_uuid"}},
+                        {"exists": {"field": "author_name"}}
+                    ]
+                }
+            }
+        }
+        
+        mapping_result = es_client.search(index="git", body=mapping_query)
+        
+        # UUID별로 가장 많이 사용된 이름 찾기
+        author_names = {}
+        for hit in mapping_result['hits']['hits']:
+            uuid = hit['_source'].get('author_uuid')
+            name = hit['_source'].get('author_name')
+            if uuid and name:
+                if uuid not in author_names:
+                    author_names[uuid] = {}
+                if name not in author_names[uuid]:
+                    author_names[uuid][name] = 0
+                author_names[uuid][name] += 1
+
+        # 각 UUID에 대해 가장 많이 사용된 이름 선택
+        author_mapping = {}
+        for uuid, names in author_names.items():
+            most_common_name = max(names.items(), key=lambda x: x[1])[0]
+            author_mapping[uuid] = most_common_name
+
+        # 2. PageRank 점수 가져오기
         result = es_client.search(
             index="git",
             body={
@@ -1168,7 +1249,7 @@ def get_all_pagerank():
                         "field": "pagerank_score"
                     }
                 },
-                "_source": ["author_name", "pagerank_score", "origin"],
+                "_source": ["author_name", "author_uuid", "pagerank_score", "origin"],
                 "size": 1000,
                 "sort": [
                     {"pagerank_score": {"order": "desc"}}
@@ -1176,23 +1257,42 @@ def get_all_pagerank():
             }
         )
         
-        # 레포지토리별로 저자 점수 그룹화
+        # 3. 레포지토리별로 저자 점수 그룹화
         repo_scores = {}
         for hit in result['hits']['hits']:
             source = hit['_source']
             repo = source.get('origin')
-            author = source.get('author_name')
+            author_uuid = source.get('author_uuid')
             score = source.get('pagerank_score')
             
-            if repo and author and score:
+            # UUID로 실제 이름 찾기
+            author_name = None
+            if author_uuid and author_uuid in author_mapping:
+                author_name = author_mapping[author_uuid]
+            elif source.get('author_name') in [name for names in author_names.values() for name in names]:
+                author_name = source.get('author_name')
+            
+            if not author_name:
+                continue  # 이름을 찾을 수 없는 경우 건너뛰기
+            
+            if repo and score:
                 if repo not in repo_scores:
                     repo_scores[repo] = []
-                repo_scores[repo].append({
-                    "author": author,
-                    "pagerank_score": score
-                })
+                
+                # 중복 제거 (같은 저자의 여러 점수 중 최고점 사용)
+                existing_entry = next((entry for entry in repo_scores[repo] if entry['author'] == author_name), None)
+                if existing_entry:
+                    if score > existing_entry['pagerank_score']:
+                        existing_entry['pagerank_score'] = score
+                        existing_entry['author_uuid'] = author_uuid
+                else:
+                    repo_scores[repo].append({
+                        "author": author_name,
+                        "author_uuid": author_uuid,
+                        "pagerank_score": score
+                    })
         
-        # 각 레포지토리 내에서 점수순 정렬
+        # 4. 각 레포지토리 내에서 점수순 정렬
         for repo in repo_scores:
             repo_scores[repo].sort(key=lambda x: x['pagerank_score'], reverse=True)
 
