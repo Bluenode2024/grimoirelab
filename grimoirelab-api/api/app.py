@@ -10,6 +10,7 @@ from datetime import datetime
 from elasticsearch import Elasticsearch
 from flask import redirect, url_for
 import urllib.parse
+from math import exp
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -745,16 +746,45 @@ def normalize(value, max_value=None):
 
 def calculate_composite_score(file_weight, author_weight):
     """종합 점수 계산"""
-    return (
-        file_weight["complexity"] * 0.2 +
-        file_weight["changes"] * 0.2 +
-        file_weight["lifespan"] * 0.1 +
-        file_weight["coupling"] * 0.1 +
-        author_weight["lines_changed"] * 0.1 +
-        author_weight["commit_frequency"] * 0.1 +
-        author_weight["code_quality"] * 0.1 +
-        author_weight["review_participation"] * 0.1
+    # 가중치 조정
+    weights = {
+        "file": {
+            "complexity": 0.15,  # 코드 복잡도
+            "changes": 0.25,     # 변경 규모
+            "lifespan": 0.05,    # 코드 수명
+            "coupling": 0.05     # 파일 간 결합도
+        },
+        "author": {
+            "lines_changed": 0.20,        # 코드 기여도
+            "commit_frequency": 0.15,      # 커밋 빈도
+            "code_quality": 0.10,          # 코드 품질
+            "review_participation": 0.05    # 리뷰 참여도
+        }
+    }
+
+    file_score = (
+        file_weight["complexity"] * weights["file"]["complexity"] +
+        file_weight["changes"] * weights["file"]["changes"] +
+        file_weight["lifespan"] * weights["file"]["lifespan"] +
+        file_weight["coupling"] * weights["file"]["coupling"]
     )
+
+    author_score = (
+        author_weight["lines_changed"] * weights["author"]["lines_changed"] +
+        author_weight["commit_frequency"] * weights["author"]["commit_frequency"] +
+        author_weight["code_quality"] * weights["author"]["code_quality"] +
+        author_weight["review_participation"] * weights["author"]["review_participation"]
+    )
+
+    # 정규화 및 가중치 적용
+    final_score = (file_score + author_score) / sum(
+        sum(w.values()) for w in weights.values()
+    )
+
+    # 점수 분포 개선을 위한 시그모이드 함수 적용
+    sigmoid = lambda x: 1 / (1 + exp(-5 * (x - 0.5)))
+    
+    return sigmoid(final_score)
 
 def save_pagerank_results(repo, author_scores):
     """PageRank 결과를 git 인덱스에 업데이트"""
@@ -1139,36 +1169,34 @@ def get_all_pagerank():
                     }
                 },
                 "_source": ["author_name", "pagerank_score", "origin"],
-                "size": 1000,  # 직접 문서를 가져오도록 수정
+                "size": 1000,
                 "sort": [
                     {"pagerank_score": {"order": "desc"}}
                 ]
             }
         )
         
-        # 저자별로 최고 점수 추출
-        author_scores = {}
+        # 레포지토리별로 저자 점수 그룹화
+        repo_scores = {}
         for hit in result['hits']['hits']:
             source = hit['_source']
-            author_name = source.get('author_name')
+            repo = source.get('origin')
+            author = source.get('author_name')
             score = source.get('pagerank_score')
             
-            if author_name and score:
-                if author_name not in author_scores or score > author_scores[author_name]:
-                    author_scores[author_name] = score
+            if repo and author and score:
+                if repo not in repo_scores:
+                    repo_scores[repo] = []
+                repo_scores[repo].append({
+                    "author": author,
+                    "pagerank_score": score
+                })
+        
+        # 각 레포지토리 내에서 점수순 정렬
+        for repo in repo_scores:
+            repo_scores[repo].sort(key=lambda x: x['pagerank_score'], reverse=True)
 
-        # 결과 포맷팅
-        authors = [
-            {"author": author, "pagerank_score": score}
-            for author, score in sorted(
-                author_scores.items(),
-                key=lambda x: x[1],
-                reverse=True
-            )
-        ]
-
-        logger.info(f"Found {len(authors)} authors with PageRank scores")
-        return jsonify({"authors": authors})
+        return jsonify({"repositories": repo_scores})
         
     except Exception as e:
         logger.error(f"Failed to get PageRank scores: {e}")
