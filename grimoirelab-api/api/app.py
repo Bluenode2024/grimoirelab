@@ -435,7 +435,7 @@ def calculate_repository_pagerank():
         for repo in repos:
             logger.info(f"\n=== Processing repository: {repo} ===")
             
-            # 1. 저자별 기본 통계 조회 (author_uuid 기준)
+            # 1. 저자별 기본 통계 조회
             author_stats = es_client.search(
                 index="git",
                 body={
@@ -449,40 +449,23 @@ def calculate_repository_pagerank():
                         "authors": {
                             "terms": {
                                 "field": "author_uuid",
-                                "size": 100
+                                "size": 1000
                             },
                             "aggs": {
-                                "names": {  # 저자 이름 가져오기 수정
+                                "author_name": {  # 저자 이름 가져오기
                                     "terms": {
                                         "field": "author_name.keyword",
-                                        "size": 1,
-                                        "order": {
-                                            "_count": "desc"
-                                        }
-                                    }
-                                },
-                                "commit_count": {
-                                    "value_count": {
-                                        "field": "hash.keyword"
+                                        "size": 1
                                     }
                                 },
                                 "lines_changed": {
                                     "sum": {
-                                        "script": {
-                                            "source": "doc['lines_added'].value + doc['lines_removed'].value"
-                                        }
+                                        "field": "lines_changed"
                                     }
                                 },
-                                "files": {
-                                    "terms": {
-                                        "field": "files.path.keyword",
-                                        "size": 1000
-                                    }
-                                },
-                                "commit_dates": {
-                                    "date_histogram": {
-                                        "field": "author_date",
-                                        "calendar_interval": "1d"
+                                "commit_count": {
+                                    "value_count": {
+                                        "field": "_id"
                                     }
                                 }
                             }
@@ -490,10 +473,6 @@ def calculate_repository_pagerank():
                     }
                 }
             )
-
-            # 쿼리 결과 로깅
-            logger.info("\nElasticsearch query result:")
-            logger.info(json.dumps(author_stats, indent=2))
 
             authors = author_stats["aggregations"]["authors"]["buckets"]
             logger.info(f"\nFound {len(authors)} authors in repository")
@@ -506,7 +485,7 @@ def calculate_repository_pagerank():
             author_scores = {}
             for author in authors:
                 author_uuid = author["key"]
-                author_name = author["names"]["buckets"][0]["key"] if author["names"]["buckets"] else author_uuid
+                author_name = author["author_name"]["buckets"][0]["key"] if author["author_name"]["buckets"] else author_uuid
                 logger.info(f"\n--- Calculating metrics for author: {author_name} (UUID: {author_uuid}) ---")
 
                 # 2.1 파일 관련 지표
@@ -517,26 +496,17 @@ def calculate_repository_pagerank():
                     "coupling": calculate_file_coupling(author, repo)
                 }
 
-                logger.info("\nFile weights:")
-                for metric, value in file_weight.items():
-                    logger.info(f"  - {metric}: {value:.3f}")
-
                 # 2.2 저자 관련 지표
                 author_weight = {
                     "lines_changed": author["lines_changed"]["value"] / max(a["lines_changed"]["value"] for a in authors),
-                    "commit_frequency": len(author["commit_dates"]["buckets"]) / 365.0,
+                    "commit_frequency": author["commit_count"]["value"] / max(a["commit_count"]["value"] for a in authors),
                     "code_quality": calculate_code_quality(author, repo),
                     "review_participation": calculate_review_participation(author, repo)
                 }
 
-                logger.info("\nAuthor weights:")
-                for metric, value in author_weight.items():
-                    logger.info(f"  - {metric}: {value:.3f}")
-
                 # 2.3 종합 점수 계산
                 final_score = calculate_composite_score(file_weight, author_weight)
-
-                author_scores[author_name] = final_score
+                author_scores[author_uuid] = final_score
                 logger.info(f"\nFinal PageRank score for {author_name}: {final_score:.3f}")
 
             # 3. 결과 저장
@@ -789,121 +759,115 @@ def calculate_composite_score(file_weight, author_weight):
 def save_pagerank_results(repo, author_scores):
     """PageRank 결과를 git 인덱스에 업데이트"""
     try:
-        bulk_data = []
-        for author, score in author_scores.items():
-            # 업데이트 쿼리
-            bulk_data.extend([
-                {
-                    "update": {
-                        "_index": "git",
-                        "_id": f"{repo}_{author}",  # 문서 ID 생성
-                        "retry_on_conflict": 3
+        logger.info(f"Saving PageRank scores for repo: {repo}")
+        logger.info(f"Author scores: {author_scores}")  # 저장할 점수 확인
+
+        # 먼저 해당 저장소의 모든 커밋 문서 가져오기
+        commits = es_client.search(
+            index="git",
+            body={
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"origin": repo}}
+                        ]
                     }
                 },
-                {
-                    "doc": {
-                        "pagerank_score": float(score)
+                "_source": ["author_name", "author_uuid"],
+                "size": 10000
+            }
+        )
+        logger.info(f"Found {len(commits['hits']['hits'])} commits")
+
+        # author_uuid와 author_name 매핑
+        author_mapping = {}
+        for hit in commits['hits']['hits']:
+            author_uuid = hit['_source'].get('author_uuid')
+            author_name = hit['_source'].get('author_name')
+            if author_uuid and author_name:
+                author_mapping[author_uuid] = author_name
+        logger.info(f"Author mapping: {author_mapping}")  # 매핑 정보 확인
+
+        bulk_data = []
+        for author_uuid, score in author_scores.items():
+            author_name = author_mapping.get(author_uuid)
+            if author_name:
+                doc_id = f"{repo}_{author_name}".replace('/', '_').replace(':', '_')
+                logger.info(f"Creating document for {author_name} with score {score}")
+                
+                bulk_data.extend([
+                    {
+                        "index": {
+                            "_index": "git",
+                            "_id": doc_id
+                        }
                     },
-                    "doc_as_upsert": True
-                }
-            ])
-        
+                    {
+                        "author_name": author_name,
+                        "author_uuid": author_uuid,
+                        "origin": repo,
+                        "pagerank_score": float(score),
+                        "grimoire_creation_date": datetime.now().isoformat()
+                    }
+                ])
+
         if bulk_data:
-            es_client.bulk(body=bulk_data)
-            logger.info(f"Successfully updated PageRank scores for {len(author_scores)} authors in {repo}")
-            
+            # bulk update 실행
+            response = es_client.bulk(body=bulk_data, refresh=True)
+            logger.info(f"Bulk update response: {response}")  # bulk 업데이트 응답 확인
+
         return True
     except Exception as e:
-        logger.error(f"Failed to update PageRank data: {e}")
+        logger.error(f"Failed to save PageRank scores: {e}")
         return False
 
 def create_pagerank_visualization():
-    """Developer Impact Analysis 시각화 생성"""
     try:
         visualization = {
             "type": "visualization",
-            "id": "dbaee8e0-f1e6-11ef-a2f9-811b5ac1e43b",
             "attributes": {
                 "title": "Developer Impact Analysis",
-                "description": "",
-                "version": 1,
-                "kibanaSavedObjectMeta": {
-                    "searchSourceJSON": json.dumps({
-                        "index": "git",
-                        "query": {
-                            "query": "",
-                            "language": "lucene"
-                        },
-                        "filter": []
-                    })
-                },
                 "visState": json.dumps({
                     "title": "Developer Impact Analysis",
-                    "type": "metric",
+                    "type": "table",
                     "params": {
-                        "addTooltip": True,
-                        "addLegend": False,
-                        "type": "table",
-                        "metric": {
-                            "percentageMode": False,
-                            "useRanges": False,
-                            "colorSchema": "Green to Red",
-                            "metricColorMode": "None",
-                            "colorsRange": [
-                                {"from": 0, "to": 10000}
-                            ],
-                            "labels": {"show": True},
-                            "invertColors": False,
-                            "style": {
-                                "bgFill": "#000",
-                                "bgColor": False,
-                                "labelColor": False,
-                                "subText": "",
-                                "fontSize": 60
-                            }
-                        }
+                        "perPage": 20,
+                        "showPartialRows": False,
+                        "showMetricsAtAllLevels": False,
+                        "sort": {"columnIndex": 1, "direction": "desc"},
+                        "showTotal": False
                     },
                     "aggs": [
                         {
                             "id": "1",
                             "enabled": True,
                             "type": "terms",
-                            "schema": "group",
+                            "schema": "bucket",
                             "params": {
-                                "field": "origin",
-                                "orderBy": "2",
+                                "field": "author_name.keyword",
+                                "size": 20,
                                 "order": "desc",
-                                "size": 10,
-                                "otherBucket": False,
-                                "otherBucketLabel": "Other",
-                                "missingBucket": False,
-                                "missingBucketLabel": "Missing"
+                                "orderBy": "2",
+                                "customLabel": "Author"
                             }
                         },
                         {
                             "id": "2",
                             "enabled": True,
-                            "type": "terms",
-                            "schema": "group",
+                            "type": "max",
+                            "schema": "metric",
                             "params": {
-                                "field": "author_name.keyword",
-                                "orderBy": "3",
-                                "order": "desc",
-                                "size": 20,
-                                "otherBucket": False,
-                                "otherBucketLabel": "Other",
-                                "missingBucket": False,
-                                "missingBucketLabel": "Missing"
+                                "field": "pagerank_score",
+                                "customLabel": "Impact Score"
                             }
                         },
                         {
                             "id": "3",
                             "enabled": True,
-                            "type": "avg",
+                            "type": "count",
                             "schema": "metric",
                             "params": {
-                                "field": "pagerank_score",
-                                "customLabel": "Impact Score"
+                                "customLabel": "Commits"
                             }
                         }
                     ]
@@ -911,38 +875,24 @@ def create_pagerank_visualization():
                 "uiStateJSON": json.dumps({
                     "vis": {
                         "params": {
-                            "sort": {
-                                "columnIndex": 2,
-                                "direction": "desc"
-                            }
+                            "sort": {"columnIndex": 1, "direction": "desc"}
                         }
                     }
                 })
             }
         }
 
-        # 기존 시각화 삭제 (있다면)
-        try:
-            es_client.delete(
-                index=".kibana",
-                id="visualization:git-pagerank",
-                ignore=[404]
-            )
-        except Exception as e:
-            logger.warning(f"Failed to delete existing visualization: {e}")
-
-        # 새로운 시각화 생성
         es_client.index(
             index=".kibana",
             id="visualization:git-pagerank",
-            document=visualization
+            document=visualization,
+            refresh=True
         )
 
-        logger.info("Successfully created Developer Impact Analysis visualization")
         return True
 
     except Exception as e:
-        logger.error(f"Failed to create Developer Impact Analysis visualization: {e}")
+        logger.error(f"Failed to create PageRank visualization: {e}")
         return False
 
 def create_pagerank_index_pattern():
@@ -1149,6 +1099,80 @@ def create_network_visualization():
     except Exception as e:
         logger.error(f"Failed to create Network visualization: {e}")
         raise
+
+# PageRank 점수 조회 API
+@app.route('/api/pagerank/<author>', methods=['GET'])
+def get_pagerank(author):
+    try:
+        result = es_client.search(
+            index="git",
+            body={
+                "query": {
+                    "term": {
+                        "author_name.keyword": author
+                    }
+                },
+                "_source": ["pagerank_score"],
+                "size": 1
+            }
+        )
+        
+        if result['hits']['hits']:
+            score = result['hits']['hits'][0]['_source'].get('pagerank_score', 0.5)
+            return jsonify({"author": author, "pagerank_score": score})
+        return jsonify({"error": "Author not found"}), 404
+        
+    except Exception as e:
+        logger.error(f"Failed to get PageRank score: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# 모든 저자의 PageRank 점수 조회
+@app.route('/api/pagerank', methods=['GET'])
+def get_all_pagerank():
+    try:
+        result = es_client.search(
+            index="git",
+            body={
+                "query": {
+                    "exists": {
+                        "field": "pagerank_score"
+                    }
+                },
+                "_source": ["author_name", "pagerank_score", "origin"],
+                "size": 1000,  # 직접 문서를 가져오도록 수정
+                "sort": [
+                    {"pagerank_score": {"order": "desc"}}
+                ]
+            }
+        )
+        
+        # 저자별로 최고 점수 추출
+        author_scores = {}
+        for hit in result['hits']['hits']:
+            source = hit['_source']
+            author_name = source.get('author_name')
+            score = source.get('pagerank_score')
+            
+            if author_name and score:
+                if author_name not in author_scores or score > author_scores[author_name]:
+                    author_scores[author_name] = score
+
+        # 결과 포맷팅
+        authors = [
+            {"author": author, "pagerank_score": score}
+            for author, score in sorted(
+                author_scores.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )
+        ]
+
+        logger.info(f"Found {len(authors)} authors with PageRank scores")
+        return jsonify({"authors": authors})
+        
+    except Exception as e:
+        logger.error(f"Failed to get PageRank scores: {e}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=9000)
