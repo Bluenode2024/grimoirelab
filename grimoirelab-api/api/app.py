@@ -87,6 +87,44 @@ def create_repository_filter(repos):
 
 def update_visualization_settings():
     try:
+        # 먼저 .kibana 인덱스의 매핑 설정
+        kibana_mapping = {
+            "mappings": {
+                "dynamic": "true",
+                "_meta": {
+                    "version": "7.17.13"
+                },
+                "properties": {
+                    "visualization": {
+                        "properties": {
+                            "title": {"type": "text"},
+                            "visState": {"type": "text"},
+                            "description": {"type": "text"},
+                            "version": {"type": "integer"},
+                            "kibanaSavedObjectMeta": {
+                                "properties": {
+                                    "searchSourceJSON": {"type": "text"}
+                                }
+                            },
+                            "attributes": {
+                                "type": "object",
+                                "dynamic": "true"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        # .kibana 인덱스 매핑 업데이트
+        if not es_client.indices.exists(index=".kibana"):
+            es_client.indices.create(index=".kibana", body=kibana_mapping)
+        else:
+            es_client.indices.put_mapping(
+                index=".kibana",
+                body=kibana_mapping["mappings"]
+            )
+
         visualization = {
             "type": "visualization",
             "attributes": {
@@ -337,7 +375,7 @@ def view_dashboard():
             "(embeddableConfig:(title:'Repository Overview'),gridData:(h:20,i:'115',w:48,x:0,y:0),id:'2f5869c0-f1b6-11ef-a51e-59ace05a8f4f',panelIndex:'115',title:'Repository%20Overview',type:visualization,version:'6.8.6'),"
             "(embeddableConfig:(),gridData:(h:15,i:'116',w:23,x:25,y:37),id:'8cfe1960-18de-11e9-ba47-d5cbef43f8d3',panelIndex:'116',type:visualization,version:'6.8.6'),"
             "(embeddableConfig:(vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),gridData:(h:15,i:'117',w:25,x:0,y:37),id:'9672d770-eed8-11ef-9c8a-253e42e7811b',panelIndex:'117',type:visualization,version:'6.8.6'),"
-            "(embeddableConfig:(title:'Developer Impact Analysis'),gridData:(h:20,i:'118',w:48,x:0,y:60),id:'991fe4b0-f1ba-11ef-b3d0-09b31acaa3cf',panelIndex:'118',type:visualization,version:'6.8.6')"
+            "(embeddableConfig:(title:'Developer Impact Analysis'),gridData:(h:20,i:'118',w:48,x:0,y:60),id:'dbaee8e0-f1e6-11ef-a2f9-811b5ac1e43b',panelIndex:'118',type:visualization,version:'6.8.6')"
             ")"
         )
 
@@ -784,7 +822,7 @@ def create_pagerank_visualization():
     try:
         visualization = {
             "type": "visualization",
-            "id": "991fe4b0-f1ba-11ef-b3d0-09b31acaa3cf",
+            "id": "dbaee8e0-f1e6-11ef-a2f9-811b5ac1e43b",
             "attributes": {
                 "title": "Developer Impact Analysis",
                 "description": "",
@@ -965,47 +1003,37 @@ def create_pagerank_index_pattern():
 
 def setup_elasticsearch_mapping():
     try:
-        # 1. git 인덱스 매핑에 pagerank_score 필드 추가
+        # 1. git 인덱스 매핑
         git_mapping = {
-            "properties": {
-                "pagerank_score": {
-                    "type": "float",
-                    "script": {
-                        "lang": "painless",
-                        "source": "doc['pagerank_score'].size() == 0 ? 0.5 : doc['pagerank_score'].value"
-                    }
-                },
-                "lines_changed": {"type": "long"},
-                "files": {"type": "long"}
+            "mappings": {
+                "properties": {
+                    "pagerank_score": {
+                        "type": "float"
+                    },
+                    "lines_changed": {"type": "long"},
+                    "files": {"type": "long"}
+                }
             }
         }
 
-        # 2. git 매핑 업데이트
+        # 2. git 매핑 업데이트 (include_type_name 제거)
         es_client.indices.put_mapping(
             index="git",
-            body=git_mapping,
-            include_type_name=True
+            body=git_mapping["mappings"]
         )
 
-        # 3. 인덱스 패턴 생성 (scripted fields 포함)
+        # 3. 인덱스 패턴 생성
         create_pagerank_index_pattern()
 
-        # 4. 기본 인덱스 설정 저장
-        config = {
-            "type": "config",
-            "config": {
-                "defaultIndex": "git"
-            }
-        }
-        
+        # 4. 설정 저장
         es_client.index(
             index=".kibana",
-            id="config:6.8.6",
-            body={
+            id="config:7.17.13",  # 버전 업데이트
+            document={
                 "type": "config",
                 "config": {
                     "defaultIndex": "git",
-                    "scripted_fields_preserve": True  # 스크립트 필드 보존 설정
+                    "scripted_fields_preserve": True
                 }
             },
             refresh=True
@@ -1015,7 +1043,6 @@ def setup_elasticsearch_mapping():
         create_network_visualization()
         create_pagerank_visualization()
 
-        logger.info("Successfully updated Elasticsearch mapping and visualizations")
         return True
 
     except Exception as e:
