@@ -51,6 +51,10 @@ services:
         - elasticsearch
       ports:
         - 5601:5601
+      volumes:
+        - kibiter_data:/usr/share/kibiter/data  # 수정됨
+        - kibiter_config:/usr/share/kibiter/.kibiter  # 수정됨
+
 
     mordred:
       restart: on-failure:5
@@ -174,3 +178,5 @@ networks:
 
 volumes:
   sortinghat-static:
+  kibiter_data:
+  kibiter_config:
