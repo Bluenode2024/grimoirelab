@@ -307,17 +307,12 @@ def update_projects():
         except Exception as es_error:
             logger.warning(f"Dashboard update failed but continuing: {es_error}")
         
-        # 5. PageRank 계산 및 시각화 업데이트
-        try:
-            logger.info("Starting PageRank calculation...")
-            # Elasticsearch 매핑 설정
-            setup_elasticsearch_mapping()
-            # PageRank 계산
-            calculate_repository_pagerank()
-            logger.info("5. PageRank calculation completed successfully")
-        except Exception as pr_error:
-            logger.warning(f"PageRank calculation failed but continuing: {pr_error}")
-                
+        # 5. PageRank 계산
+        calculate_repository_pagerank()
+        
+        # 6. 인덱스 패턴 업데이트
+        update_git_index_pattern()
+
         return jsonify({
             "success": True,
             "message": "All updates completed successfully",
@@ -331,11 +326,8 @@ def update_projects():
         })
         
     except Exception as e:
-        logger.error(f"Update process failed: {e}")
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
+        logger.error(f"Failed to update projects: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/view-dashboard', methods=['GET'])
 def view_dashboard():
@@ -377,7 +369,7 @@ def view_dashboard():
             "(embeddableConfig:(title:'Repository Overview'),gridData:(h:20,i:'115',w:48,x:0,y:0),id:'2f5869c0-f1b6-11ef-a51e-59ace05a8f4f',panelIndex:'115',title:'Repository%20Overview',type:visualization,version:'6.8.6'),"
             "(embeddableConfig:(),gridData:(h:15,i:'116',w:23,x:25,y:37),id:'8cfe1960-18de-11e9-ba47-d5cbef43f8d3',panelIndex:'116',type:visualization,version:'6.8.6'),"
             "(embeddableConfig:(vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),gridData:(h:15,i:'117',w:25,x:0,y:37),id:'9672d770-eed8-11ef-9c8a-253e42e7811b',panelIndex:'117',type:visualization,version:'6.8.6'),"
-            "(embeddableConfig:(title:'Developer Impact Analysis'),gridData:(h:20,i:'118',w:48,x:0,y:60),id:'dbaee8e0-f1e6-11ef-a2f9-811b5ac1e43b',panelIndex:'118',type:visualization,version:'6.8.6')"
+            "(embeddableConfig:(title:'Developer Impact Analysis'),gridData:(h:20,i:'118',w:48,x:0,y:60),id:'cf272210-f1f3-11ef-a2f9-811b5ac1e43b',panelIndex:'118',type:visualization,version:'6.8.6')"
             ")"
         )
 
