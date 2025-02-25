@@ -5,7 +5,7 @@ import os
 import json
 import logging
 
-TIMEOUT_SECONDS = 120
+TIMEOUT_SECONDS = 300
 
 try:
     from werkzeug.urls import quote as url_quote
@@ -36,7 +36,31 @@ def add_repository():
             return jsonify({"error": "Invalid repository data"}), 400
         
         logger.info(f"Validated data: {json.dumps(validated_data, indent=2)}")
-        
+
+        # GrimoireLab API 호출을 위한 전체 설정 구성
+        api_request_data = {
+            "projects": validated_data,
+            "backends": ["git"],
+            "update_index_patterns": False,  # 이 옵션을 False로 설정
+            "conf": {  # 이 부분이 누락되었을 수 있습니다
+                "es_collection": {
+                    "url": os.getenv('ES_URL', 'http://elasticsearch:9200')
+                },
+                "es_enrichment": {
+                    "url": os.getenv('ES_URL', 'http://elasticsearch:9200')
+                },
+                "general": {
+                    "bulk_size": 1000,
+                    "scroll_size": 100,
+                    "debug": True
+                },
+                "git": {
+                    "raw_index": "git_raw",
+                    "enriched_index": "git_enriched"
+                }
+            }
+        }
+
         # projects.json 파일 내용 확인 (업데이트 전)
         try:
             with open('/default-grimoirelab-settings/projects.json', 'r') as f:
@@ -49,8 +73,8 @@ def add_repository():
         # GrimoireLab API 호출
         response = requests.post(
             f"{GRIMOIRELAB_API_URL}/update-projects",
-            json=validated_data,
-            timeout=120
+            json= validated_data,
+            timeout=300
         )
         
         logger.info(f"GrimoireLab API response: {response.status_code} - {response.text}")

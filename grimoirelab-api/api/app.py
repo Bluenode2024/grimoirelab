@@ -311,7 +311,7 @@ def update_projects():
         calculate_repository_pagerank()
         
         # 6. 인덱스 패턴 업데이트
-        update_git_index_pattern()
+        #update_git_index_pattern()
 
         return jsonify({
             "success": True,
