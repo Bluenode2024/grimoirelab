@@ -5,6 +5,8 @@ import os
 import json
 import logging
 
+TIMEOUT_SECONDS = 120
+
 try:
     from werkzeug.urls import quote as url_quote
 except ImportError:
@@ -48,7 +50,7 @@ def add_repository():
         response = requests.post(
             f"{GRIMOIRELAB_API_URL}/update-projects",
             json=validated_data,
-            timeout=10
+            timeout=120
         )
         
         logger.info(f"GrimoireLab API response: {response.status_code} - {response.text}")
