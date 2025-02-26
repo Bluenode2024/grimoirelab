@@ -12,10 +12,16 @@ from flask import redirect, url_for
 import urllib.parse
 from math import exp
 import requests
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+import atexit
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# APScheduler 로깅 설정 추가
+logging.getLogger('apscheduler').setLevel(logging.INFO)
 
 try:
     from werkzeug.urls import quote as url_quote
@@ -33,8 +39,127 @@ KIBANA_URL = os.getenv('KIBANA_URL', 'http://localhost:8000')
 # Elasticsearch 클라이언트 초기화
 es_client = Elasticsearch([ES_URL])
 
+# calculate_repository_pagerank 함수를 먼저 정의
+def calculate_repository_pagerank():
+    """레포지토리별 PageRank 계산"""
+    logger.info("Starting scheduled PageRank calculation...")
+    try:
+        repos = get_repositories_from_projects()
+        logger.info(f"Found {len(repos)} repositories for PageRank calculation")
+        logger.info(f"\n=== Starting PageRank calculation for {len(repos)} repositories ===")
 
+        for repo in repos:
+            logger.info(f"\n=== Processing repository: {repo} ===")
+            
+            # 1. 저자별 기본 통계 조회
+            author_stats = es_client.search(
+                index="git",
+                body={
+                    "size": 0,
+                    "query": {
+                        "term": {
+                            "origin": repo
+                        }
+                    },
+                    "aggs": {
+                        "authors": {
+                            "terms": {
+                                "field": "author_uuid",
+                                "size": 1000
+                            },
+                            "aggs": {
+                                "author_name": {  # 저자 이름 가져오기
+                                    "terms": {
+                                        "field": "author_name.keyword",
+                                        "size": 1
+                                    }
+                                },
+                                "lines_changed": {
+                                    "sum": {
+                                        "field": "lines_changed"
+                                    }
+                                },
+                                "commit_count": {
+                                    "value_count": {
+                                        "field": "_id"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            )
 
+            authors = author_stats["aggregations"]["authors"]["buckets"]
+            logger.info(f"\nFound {len(authors)} authors in repository")
+
+            if not authors:
+                logger.warning("No authors found, skipping repository")
+                continue
+
+            # 2. 각 저자별 상세 지표 계산
+            author_scores = {}
+            for author in authors:
+                author_uuid = author["key"]
+                author_name = author["author_name"]["buckets"][0]["key"] if author["author_name"]["buckets"] else author_uuid
+                logger.info(f"\n--- Calculating metrics for author: {author_name} (UUID: {author_uuid}) ---")
+
+                # 2.1 파일 관련 지표
+                file_weight = {
+                    "complexity": calculate_file_complexity(author, repo),
+                    "changes": author["lines_changed"]["value"] / max(a["lines_changed"]["value"] for a in authors),
+                    "lifespan": calculate_file_lifespan(author),
+                    "coupling": calculate_file_coupling(author, repo)
+                }
+
+                # 2.2 저자 관련 지표
+                author_weight = {
+                    "lines_changed": author["lines_changed"]["value"] / max(a["lines_changed"]["value"] for a in authors),
+                    "commit_frequency": author["commit_count"]["value"] / max(a["commit_count"]["value"] for a in authors),
+                    "code_quality": calculate_code_quality(author, repo),
+                    "review_participation": calculate_review_participation(author, repo)
+                }
+
+                # 2.3 종합 점수 계산
+                final_score = calculate_composite_score(file_weight, author_weight)
+                author_scores[author_uuid] = final_score
+                logger.info(f"\nFinal PageRank score for {author_name}: {final_score:.3f}")
+
+            # 3. 결과 저장
+            save_pagerank_results(repo, author_scores)
+            logger.info(f"\nSaved PageRank results for repository: {repo}")
+
+        logger.info("\n=== PageRank calculation completed for all repositories ===")
+        logger.info("PageRank calculation completed successfully")
+
+    except Exception as e:
+        logger.error(f"PageRank calculation failed: {e}")
+
+# 그 다음 스케줄러 초기화 함수 정의
+def init_scheduler():
+    """스케줄러 초기화 및 시작"""
+    try:
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(
+            func=calculate_repository_pagerank,
+            trigger=IntervalTrigger(minutes=1),
+            id='pagerank_calculation',
+            name='Calculate PageRank every minute',
+            replace_existing=True,
+            misfire_grace_time=None
+        )
+        
+        scheduler.start()
+        logger.info("PageRank calculation scheduler started successfully")
+        
+        atexit.register(lambda: scheduler.shutdown())
+        
+        return scheduler
+    except Exception as e:
+        logger.error(f"Failed to initialize scheduler: {e}")
+        return None
+
+# 나머지 함수들 정의
 def get_repositories_from_projects():
     """projects.json에서 저장소 URL 목록을 가져옵니다."""
     try:
@@ -419,99 +544,6 @@ def health_check():
             "status": "unhealthy",
             "error": str(e)
         }), 500
-
-def calculate_repository_pagerank():
-    """레포지토리별 PageRank 계산"""
-    try:
-        repos = get_repositories_from_projects()
-        logger.info(f"\n=== Starting PageRank calculation for {len(repos)} repositories ===")
-
-        for repo in repos:
-            logger.info(f"\n=== Processing repository: {repo} ===")
-            
-            # 1. 저자별 기본 통계 조회
-            author_stats = es_client.search(
-                index="git",
-                body={
-                    "size": 0,
-                    "query": {
-                        "term": {
-                            "origin": repo
-                        }
-                    },
-                    "aggs": {
-                        "authors": {
-                            "terms": {
-                                "field": "author_uuid",
-                                "size": 1000
-                            },
-                            "aggs": {
-                                "author_name": {  # 저자 이름 가져오기
-                                    "terms": {
-                                        "field": "author_name.keyword",
-                                        "size": 1
-                                    }
-                                },
-                                "lines_changed": {
-                                    "sum": {
-                                        "field": "lines_changed"
-                                    }
-                                },
-                                "commit_count": {
-                                    "value_count": {
-                                        "field": "_id"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            )
-
-            authors = author_stats["aggregations"]["authors"]["buckets"]
-            logger.info(f"\nFound {len(authors)} authors in repository")
-
-            if not authors:
-                logger.warning("No authors found, skipping repository")
-                continue
-
-            # 2. 각 저자별 상세 지표 계산
-            author_scores = {}
-            for author in authors:
-                author_uuid = author["key"]
-                author_name = author["author_name"]["buckets"][0]["key"] if author["author_name"]["buckets"] else author_uuid
-                logger.info(f"\n--- Calculating metrics for author: {author_name} (UUID: {author_uuid}) ---")
-
-                # 2.1 파일 관련 지표
-                file_weight = {
-                    "complexity": calculate_file_complexity(author, repo),
-                    "changes": author["lines_changed"]["value"] / max(a["lines_changed"]["value"] for a in authors),
-                    "lifespan": calculate_file_lifespan(author),
-                    "coupling": calculate_file_coupling(author, repo)
-                }
-
-                # 2.2 저자 관련 지표
-                author_weight = {
-                    "lines_changed": author["lines_changed"]["value"] / max(a["lines_changed"]["value"] for a in authors),
-                    "commit_frequency": author["commit_count"]["value"] / max(a["commit_count"]["value"] for a in authors),
-                    "code_quality": calculate_code_quality(author, repo),
-                    "review_participation": calculate_review_participation(author, repo)
-                }
-
-                # 2.3 종합 점수 계산
-                final_score = calculate_composite_score(file_weight, author_weight)
-                author_scores[author_uuid] = final_score
-                logger.info(f"\nFinal PageRank score for {author_name}: {final_score:.3f}")
-
-            # 3. 결과 저장
-            save_pagerank_results(repo, author_scores)
-            logger.info(f"\nSaved PageRank results for repository: {repo}")
-
-        logger.info("\n=== PageRank calculation completed for all repositories ===")
-
-    except Exception as e:
-        logger.error(f"Failed to calculate PageRank: {e}")
-        raise
 
 def calculate_file_complexity(file_path, repo):
     """파일 복잡도 계산"""
@@ -1294,5 +1326,14 @@ def get_all_pagerank():
         logger.error(f"Failed to get PageRank scores: {e}")
         return jsonify({"error": str(e)}), 500
 
+# 전역 스케줄러 초기화
+scheduler = init_scheduler()
+
 if __name__ == '__main__':
+    # 스케줄러가 제대로 초기화되었는지 확인
+    if scheduler and scheduler.running:
+        logger.info("Scheduler is running and will calculate PageRank every minute")
+    else:
+        logger.error("Failed to start scheduler")
+    
     app.run(host='0.0.0.0', port=9000)
