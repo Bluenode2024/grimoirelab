@@ -491,7 +491,7 @@ def view_dashboard():
             "(embeddableConfig:(title:Commits,vis:(legendOpen:!f)),gridData:(h:8,i:'2',w:16,x:0,y:52),id:git_evolution_commits,panelIndex:'2',title:'Git%20Commits',type:visualization,version:'6.8.6'),"
             "(embeddableConfig:(title:'Git%20Top%20Authors',vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),gridData:(h:17,i:'111',w:25,x:0,y:20),id:git_overview_top_authors,panelIndex:'111',title:'Git%20Top%20Authors',type:visualization,version:'6.8.6'),"
             "(embeddableConfig:(title:'Git%20Top%20Projects',vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),gridData:(h:17,i:'112',w:23,x:25,y:20),id:git_overview_top_projects,panelIndex:'112',title:'Git%20Top%20Projects',type:visualization,version:'6.8.6'),"
-            "(embeddableConfig:(title:'Repository Overview'),gridData:(h:20,i:'115',w:48,x:0,y:0),id:'2f5869c0-f1b6-11ef-a51e-59ace05a8f4f',panelIndex:'115',title:'Repository%20Overview',type:visualization,version:'6.8.6'),"
+            "(embeddableConfig:(title:'Repository Overview'),gridData:(h:20,i:'115',w:48,x:0,y:0),id:'1c11da50-f4fd-11ef-97b5-91088a739ab1',panelIndex:'115',title:'Repository%20Overview',type:visualization,version:'6.8.6'),"
             "(embeddableConfig:(),gridData:(h:15,i:'116',w:23,x:25,y:37),id:'8cfe1960-18de-11e9-ba47-d5cbef43f8d3',panelIndex:'116',type:visualization,version:'6.8.6'),"
             "(embeddableConfig:(vis:(params:(config:(searchKeyword:''),sort:(columnIndex:!n,direction:!n)))),gridData:(h:15,i:'117',w:25,x:0,y:37),id:'9672d770-eed8-11ef-9c8a-253e42e7811b',panelIndex:'117',type:visualization,version:'6.8.6'),"
             "(embeddableConfig:(title:'Developer Impact Analysis'),gridData:(h:20,i:'118',w:48,x:0,y:60),id:'cf272210-f1f3-11ef-a2f9-811b5ac1e43b',panelIndex:'118',type:visualization,version:'6.8.6')"
@@ -1189,7 +1189,7 @@ def create_network_visualization():
         # 시각화 저장
         es_client.index(
             index=".kibana",
-            id="2f5869c0-f1b6-11ef-a51e-59ace05a8f4f",
+            id="1c11da50-f4fd-11ef-97b5-91088a739ab1",
             body=visualization,
             doc_type="doc"
         )
