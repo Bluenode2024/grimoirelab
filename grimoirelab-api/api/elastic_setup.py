@@ -105,3 +105,67 @@ def setup_elasticsearch():
         logger.error(f"Failed to setup Elasticsearch: {str(e)}")
         logger.exception("Detailed error:")
         raise 
+
+def update_git_index_pattern():
+    try:
+        # 1. 현재 git 인덱스의 매핑 가져오기
+        mapping = es_client.indices.get_mapping(index="git")
+        
+        # 2. 필드 매핑 생성
+        fields = []
+        
+        # 기존 필드들 추가
+        for field_name, field_props in mapping["git"]["mappings"]["properties"].items():
+            field_type = field_props.get("type", "string")
+            field_obj = {
+                "name": field_name,
+                "type": field_type,
+                "count": 0,
+                "scripted": False,
+                "searchable": True,
+                "aggregatable": True,
+                "readFromDocValues": True
+            }
+            fields.append(field_obj)
+        
+        # pagerank_score 필드 추가
+        fields.append({
+            "name": "pagerank_score",
+            "type": "number",
+            "count": 0,
+            "scripted": False,
+            "searchable": True,
+            "aggregatable": True,
+            "readFromDocValues": True
+        })
+
+        # 3. 인덱스 패턴 문서 생성
+        index_pattern = {
+            "type": "index-pattern",
+            "index-pattern": {
+                "title": "git*",
+                "timeFieldName": "grimoire_creation_date",
+                "fields": json.dumps(fields),
+                "fieldFormatMap": "{}",
+                "sourceFilters": "[]"
+            },
+            "migrationVersion": {
+                "index-pattern": "6.5.0"
+            }
+        }
+
+        # 4. 인덱스 패턴 저장
+        es_client.index(
+            index=".kibana",
+            doc_type="doc",  # Kibana 6.x에서는 doc_type이 필요
+            id="index-pattern:git",
+            body=index_pattern,
+            refresh=True
+        )
+
+        logger.info("Successfully updated git index pattern with pagerank_score field")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to update git index pattern: {e}")
+        return False 
